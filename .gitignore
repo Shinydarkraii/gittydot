@@ -1,0 +1,24 @@
+# Godot caches and generated import metadata
+.godot/
+*.import
+
+# Local test fixtures, portable test engines and agent files
+/*-temp-chatgpt/
+__pycache__/
+*.py[cod]
+*.log
+
+# Exports and local credentials
+*.exe
+*.pck
+*.zip
+.env
+.env.*
+!.env.example
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Machine-specific installed-copy mapping for contributor tools
+/LOCAL_SYNC.md
