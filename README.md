@@ -83,14 +83,6 @@ Keep the folder named **`gittydot`**, directly under `addons/`. Enable only one 
 - **Git LFS** is optional, needed when using the LFS helpers.
 - **GitHub CLI (`gh`)** is optional, used only to create/publish a GitHub repository from the initialization dialog. Missing installations are skipped quietly.
 
-For an existing project, add this to `.gitignore`:
-
-```gitignore
-/*-temp-chatgpt/
-```
-
-GittyDot adds it when initializing a new repository. This excludes its project-local temporary files.
-
 <a id="quick-start"></a>
 
 ## 🚀 Quick start
