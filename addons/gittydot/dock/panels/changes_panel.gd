@@ -807,7 +807,7 @@ func _save_changelist_state() -> void:
 
 ## A literal repository-root path, not a glob; directories retain their trailing slash.
 static func ignore_pattern(path: String) -> String:
-	if path.is_empty() or path.is_absolute_path() or path.contains("\n") or path.contains("\r") or path.contains("\u0000"):
+	if path.is_empty() or path.is_absolute_path() or path.contains("\n") or path.contains("\r") or path.to_utf8_buffer().has(0):
 		return ""
 	for part in path.trim_suffix("/").split("/"):
 		if part in ["", ".", ".."]:

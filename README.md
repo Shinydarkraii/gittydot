@@ -1,165 +1,187 @@
-# GittyDot
+<p align="center">
+  <img src="addons/gittydot/icon.png" width="112" height="112" alt="GittyDot: a blue G with a coral Git branch and three nodes">
+</p>
 
-Git tools integrated into the Godot editor, with an IntelliJ-inspired workflow for reviewing changes, staging files, committing, and browsing history.
+<h1 align="center">GittyDot</h1>
 
-GittyDot is a fork of [Godit](https://github.com/rychtar/godit) by Michal Rychtar, based on package version **1.1.1**. It keeps the upstream Git CLI backend and builds a different editor integration around it. The current GittyDot version is **0.1.0**.
+<p align="center"><strong>Review changes, edit diffs, and commit without leaving Godot.</strong></p>
 
-## Features
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.1.0-589eff" alt="Version 0.1.0">
+  <img src="https://img.shields.io/badge/Godot-tested%20on%204.7.2-478cbf" alt="Tested on Godot 4.7.2">
+  <img src="https://img.shields.io/badge/platform-verified%20on%20Windows-626b78" alt="Verified on Windows">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f47c76" alt="MIT license"></a>
+</p>
 
-- **Native FileSystem status:** modified, added, renamed, deleted, and conflicted files show status badges beside their names.
-- **Commit dock:** staging checkboxes, changelists, commit messages, an amend target dropdown, commit, and push controls. Select a recent branch commit or right-click a commit in Git Log and choose **Amend This Commit…**.
-- **File and folder actions:** right-click folders in Commit to add new files to Git, stage or unstage their displayed descendants, stash, revert, move to a changelist, copy their path, or add the folder to `.gitignore`. Files also expose **Add to .gitignore**, and the native FileSystem menu offers **Git: Add Folder to .gitignore**.
-- **Central diff editor:** switch between **Side by side** and **Unified** beside **Open in Editor**. Working-file comparisons have an editable right pane, Save/Reload controls, auto-save and Undo. Split panes have a draggable divider and synchronized horizontal and vertical scrolling; scrollbars appear when needed.
-- **Inline script changes:** adjacent changed lines share continuous gutter markers. Modified lines stay yellow, inserted text is green, and replacements receive stronger yellow/green emphasis.
-- **Compact change previews:** click a gutter marker to inspect the previous version, navigate changes, roll back the hunk, or open its full diff. Modified text keeps modification colors; deleted lines use red.
-- **Automatic script saving:** native Godot saves after a short editing pause, with Undo and saved markers preserved.
-- **Git Log:** searchable commit graph, file history, stash comparisons, and historical diffs opened in the central editor.
-- **Git console:** command history, literal output rendering, and confirmation before destructive commands. Error dialogs offer **Show details in Console**, which opens the Console tab at the corresponding failure, including version/validation errors that never launched Git.
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="GUIDE.md">Guide</a> ·
+  <a href="#limitations">Limitations</a> ·
+  <a href="#testing">Testing</a> ·
+  <a href="#feedback">Feedback</a>
+</p>
 
-Upstream branch, tag, remote, stash, merge, rebase, cherry-pick, conflict-resolution, blame, image-diff, and scene/config inspection tools remain available. See [UPSTREAM_README.md](UPSTREAM_README.md) for the original Godit feature overview; its installation and layout instructions describe the upstream plugin.
+GittyDot brings an IntelliJ-inspired Git workflow to the Godot editor: a focused **Commit** dock, a central **diff editor**, changes marked in your scripts, and a **Git Log** for reviewing history.
 
-## Requirements
+It is a fork of [Godit](https://github.com/rychtar/godit) 1.1.1, retaining its Git CLI backend and extending its editor integration. GittyDot runs your installed `git` from GDScript; it does not need the Godot Git GDExtension or a separate Version Control plugin.
 
-- **Godot 4.7.2 on Windows** is the verified configuration for this fork.
-- `git` must be installed and available on the editor's `PATH`.
-- Amending a selected **older** commit requires **Git 2.45.0 or newer** in GittyDot. Latest-commit amend retains its existing Git compatibility.
-- The project must be inside a Git repository, or initialized through the plugin.
-- Remote operations require working Git authentication.
+> [!IMPORTANT]
+> **0.1.0 is an early release.** The verified configuration is **Godot 4.7.2 on Windows**. Other engine versions, operating systems, and every inherited Git operation have not been validated. The known UI issues below are planned for **0.2.0**.
 
-Compatibility with other Godot versions and platforms has not been verified for GittyDot. Godit's upstream compatibility range does not establish compatibility for this fork.
+<a id="features"></a>
 
-## Installation
+## ✨ Features
 
-1. Download or clone this fork.
-2. Copy the complete `addons/gittydot/` directory into your Godot project's `addons/` directory, and copy the repository's `LICENSE` into the installed `addons/gittydot/` folder.
-3. Disable **Godit** if it is installed.
-4. Enable **GittyDot** in **Project Settings > Plugins**.
-5. Restart an already-open editor after replacing or updating the addon.
+- **Commit dock:** stage and unstage files with checkboxes, organize work into changelists, write commit messages, amend, and commit or commit-and-push.
+- **FileSystem status:** see modified, added, renamed, deleted, and conflicted files alongside your normal Godot files.
+- **File and folder actions:** right-click to stage, unstage, add new files, move changes to a changelist, or add literal paths to `.gitignore`. Ignoring a tracked file does not remove it from Git.
+- **Central diff editor:** choose **Side by side** or **Unified**, resize the split, and scroll both panes together. Scrollbars appear when content overflows.
+- **Editable working-file comparisons:** edit the right pane in **Latest commit → Working file** or **Unstaged changes**. Save manually or use auto-save; staged snapshots and historical versions remain read-only.
+- **Inline script changes:** grouped gutter markers and character highlights show edits in Godot's Script editor. Click a marker to inspect the previous code, navigate changes, roll back a hunk, or open its diff.
+- **Automatic saving:** project-backed scripts and editable working-file comparisons save after a **350 ms editing pause**, preserving Undo and leaving staging untouched.
+- **Commit history:** inspect the commit graph, search history, review file history, and double-click a changed file to open its diff in the main screen. Initial commits compare against an empty baseline.
+- **Selected-commit amend:** select the latest or an earlier branch commit. Older-commit amendments require **Git 2.45.0+**, confirm the history rewrite, and support conflict Continue/Abort recovery.
+- **Git console and diagnostics:** run Git commands, review their literal output, and use **Show details in Console** to jump to a failure. Destructive console operations ask for confirmation.
+- **Additional Git tools:** inherited branch, tag, remote, stash, merge, rebase, cherry-pick, conflict-resolution, blame, image-diff, scene/config inspection, and optional Git LFS helpers remain available.
 
-The resulting layout must include:
+Read the [usage guide](GUIDE.md) for comparison modes, partial staging, draft recovery, and advanced workflows.
+
+<a id="installation"></a>
+
+## 🛠 Installation
+
+1. Download a GittyDot release ZIP, or clone [this repository](https://github.com/Shinydarkraii/gittydot).
+2. Place the complete `addons/gittydot/` folder in your project's `addons/` folder. Keep its `LICENSE` and `README.md` with it.
+3. Disable **Godit** if it is installed, then enable **GittyDot** in **Project Settings → Plugins**.
+4. Restart the editor after replacing an existing installation.
 
 ```text
 your-project/
-  project.godot
-  addons/
-    gittydot/
-      plugin.cfg
-      plugin.gd
-      dock/
-      util/
-      ...
+├── project.godot
+└── addons/
+    └── gittydot/
+        ├── plugin.cfg
+        ├── plugin.gd
+        ├── icon.png
+        ├── LICENSE
+        ├── README.md
+        ├── dock/
+        └── util/
 ```
 
-Keep the directory named `gittydot`: the plugin uses `res://addons/gittydot/` resource paths. Avoid placing an extra downloaded repository directory between `addons/` and `gittydot/`.
+Keep the folder named **`gittydot`**, directly under `addons/`. Enable only one of Godit and GittyDot.
 
-Enable only one of Godit and GittyDot. GittyDot does not require the Godot Git GDExtension plugin or an AI/editor assistant.
+### Requirements
 
-Add this pattern to the project's `.gitignore` for the plugin's local temporary files:
+- **Godot 4.7.2 on Windows** is the tested setup.
+- **Git** must be installed and available on the editor's `PATH`.
+- The project must be inside a Git repository; GittyDot can initialize one through its dock.
+- Configure Git authentication before using remote operations.
+- **Git 2.45.0+** is required specifically for amending an older commit.
+- **Git LFS** is optional, needed when using the LFS helpers.
+- **GitHub CLI (`gh`)** is optional, used only to create/publish a GitHub repository from the initialization dialog. Missing installations are skipped quietly.
+
+For an existing project, add this to `.gitignore`:
 
 ```gitignore
 /*-temp-chatgpt/
 ```
 
-New repositories initialized through GittyDot receive this pattern automatically.
+GittyDot adds it when initializing a new repository. This excludes its project-local temporary files.
 
-## Workflow
+<a id="quick-start"></a>
 
-### Review changes
+## 🚀 Quick start
 
-Use the normal **FileSystem** dock to see file status. Select a changed file in **Commit**, choose **Git: Show Change** from the FileSystem context menu, or use **Show Diff** in a gutter preview to open the central **GittyDot** screen.
+1. Open **Commit** and select a changed file to review it in the central **GittyDot** screen.
+2. Choose **Side by side** to edit a supported working file on the right, or **Unified** to inspect the diff.
+3. Tick the files you want to stage. Untick them to unstage; use a folder's context menu for actions on its displayed descendants.
+4. Enter a commit message, then choose **Commit** or **Commit and Push**.
+5. Open **Git Log** in the bottom panel to inspect history. Double-click or press Enter on a changed file to open its historical diff.
 
-The default comparison is **Latest commit → Working file**, including both staged and unstaged changes. New files compare against an empty baseline and appear as additions.
+**Auto-save is on by default.** Automatic staging, adding new files, and background fetching are off. Saving never commits or pushes your work.
 
-Use the dropdown beside **Open in Editor** to choose **Side by side** or **Unified**. The choice is remembered for the project. Supported scripts and scenes open in their native Godot editors; other text/configuration files can be reviewed in GittyDot's diff view.
+Use **Project → Tools → GittyDot** to toggle auto-save, blame, and background fetch. With auto-save off, editable comparisons still support **Save** and **Ctrl/Cmd+S**.
 
-In **Side by side**, **Latest commit → Working file** and **Unstaged changes** let you edit the working file on the right. The left version stays read-only. Editable comparisons show complete documents without collapsed separators or padding lines; vertical scrolling follows corresponding source lines across insertions/deletions. Use **Save**, **Ctrl/Cmd+S**, or the default 350 ms auto-save. Undo remains available after saving, and saves leave staging untouched. Selecting a different file or starting a Git operation flushes pending comparison edits first.
+<details>
+<summary><strong>Which comparison should I use?</strong></summary>
 
-Hunk/line patch buttons, collapsed context, whitespace/noise filtering and the structured **Scene/Settings** view are disabled in editable comparisons. Use **Unified** for read-only inspection and applicable patch actions, or the **Commit** checkboxes to stage files. Staged snapshots, commit/stash history, images, binary files and deleted files remain read-only. Editable text must be UTF-8, within the current project, up to 2 MiB and 20,000 lines; file symlinks stay read-only.
+- **Latest commit → Working file:** includes both staged and unstaged changes. The working file is editable in Side by side.
+- **Unstaged changes:** compares the index with the working file. The working file is editable in Side by side.
+- **Staged changes:** compares the latest commit with the index; read-only.
+- **Commit or stash history:** compares saved revisions; read-only. A commit is compared with its first parent, or an empty tree for the initial commit.
 
-Comparison saves preserve UTF-8 BOMs, LF/CRLF style and a missing final newline. If the file changes externally, disappears, or has another unsaved draft in Godot's Script/Scene editor, saving pauses and keeps both versions. **Reload** explicitly discards the comparison draft; blocked/unsaved drafts are stored in the project-local temporary folder for recovery after plugin reload. Clean native script tabs are synchronized after saves. **Open in Editor** reloads a clean cached scene from the working file, while preserving unsaved native scenes.
+Editable panes show complete documents. Collapsed context, patch buttons, whitespace/noise filtering, and structured Scene/Settings inspection are disabled in this mode. Use the Commit checkboxes to stage files, or an applicable read-only view for patch actions.
 
-### Stage and commit
+</details>
 
-In the **Commit** dock, select the files to stage, enter a commit message, and commit. Changelists, amend, and **Commit and Push** are also available.
+<a id="limitations"></a>
 
-To amend a specific commit, use the dropdown beside **Amend**, or right-click it in **Git Log > Amend This Commit…**. The dock loads its message and displays its short hash; edit the message and stage the changes you want to include. Reword, Fixup, Squash and Drop remain separate Log menu actions. Amending an older commit asks before replaying newer commits and changing their hashes. Amendments across merge commits are refused. The Git version is checked before any amendment changes the index or history; an unsupported version leaves the draft and target intact.
+## ⚠️ Known limitations
 
-If replay encounters conflicts, resolve them and use **Continue**, or **Abort** to restore the original history with the amendment changes staged. Recovery information survives plugin reload. Failures expose **Show details in Console**; later commands do not change which diagnostic that button opens. No automatic force-push is performed.
+The [0.2.0 roadmap](ROADMAP.md) tracks these reported issues in **0.1.0**:
 
-Use **Unstaged changes** for index → working-file comparisons and **Staged changes** for latest-commit → index comparisons. Read-only inspection views expose applicable hunk/line staging, unstaging and revert actions. Editable working-file panes use Commit checkboxes for staging; the default latest-commit → working-file comparison does not apply patches directly, since they may not match a partially staged index.
+- A narrow Commit dock can clip filename prefixes and hide staging checkboxes.
+- Editable comparisons do not yet have the change signs, change gutter, or minimap needed to find edits easily.
+- Editable-diff colors still need to match the committed-diff renderer.
+- **Open in Editor** can be unavailable in reported script cases; further reproduction and fixes are planned.
 
-Automatic staging, automatic adding of new files, and background fetch are **off by default**. Auto-save does not stage, commit, or push.
+Editable comparisons currently support existing project-local UTF-8 files up to **2 MiB / 20,000 lines**. File symlinks, binaries, images, deleted files, staged snapshots, and historical revisions are read-only.
 
-Right-click a file or folder and choose **Add to .gitignore** or **Add Folder to .gitignore**. The rule is anchored to the repository root, with filename wildcard characters escaped. Existing rules and files are preserved. Already tracked files remain tracked; ignoring them does not unstage or remove them from Git.
+Multiple comparison tabs, broader keyboard shortcuts, and further image/scene workflow polish remain future work. FileSystem decorations depend on Godot's internal editor controls and need checking after engine upgrades.
 
-### Inspect history
+<a id="authentication"></a>
 
-Open **Git Log** in the bottom panel. A single click selects a changed file; **double-click or Enter** opens its diff in the central editor.
+## 🔑 Authentication and local data
 
-Commit diffs compare the selected commit with its first parent. Initial commits show additions, deleted historical files remain viewable, and stash comparisons use their recorded revisions. Historical diffs are read-only and retain the selected revision during background refreshes.
+Set up your system Git credentials first using a credential helper or SSH keys. GittyDot does not provide a password or token entry screen. Its child Git processes use noninteractive prompt/editor settings, restored when the plugin is disabled.
 
-## Auto-save and preferences
+SSH is scoped to GittyDot's Git processes with `ssh -o BatchMode=yes`; the plugin does not change the editor's SSH environment or adopt a repository's `core.sshCommand`. A trusted user-supplied `GIT_SSH_COMMAND` takes precedence. See the [guide](GUIDE.md) for details.
 
-Auto-save is **enabled by default** for project-backed scripts and editable working-file comparisons. It saves after **350 ms without another edit**, and flushes pending saves when the application loses focus or before staging. Native scripts save through Godot's ScriptEditor; comparison panes save their full text to the working file using a guarded atomic replacement. The Tools toggle controls both; Save/Ctrl+S remains available with auto-save disabled.
+Preferences and changelists live in **`.godot/gittydot/`**. Diff, blame, patch, and recovery files live in **`<project-name>-temp-chatgpt/gittydot/`**. These are local project files; the temporary-folder name is a development convention, not a callback or external service.
 
-If a script changes externally or disappears, automatic saving pauses to preserve the disk version and editor draft. Resolve Godot's reload prompt or save manually. Unsaved changes in the native Scene editor, untitled scripts and embedded scripts continue to use the native save workflow; raw scene text edited in the comparison pane follows its working-file save flow.
+Git hooks and helpers run with your permissions. GittyDot does not sandbox repository code.
 
-Toggle auto-save, blame, and background fetch in **Project > Tools > GittyDot**. Preferences and changelists are local to each project under `.godot/gittydot/`.
+<a id="documentation"></a>
 
-## Git console and authentication
+## 📖 Documentation
 
-The console passes arguments directly to Git. Output is rendered as literal text, and its command log uses mutex-protected snapshots.
+- [Usage guide](GUIDE.md) — comparisons, staging, amend, auto-save, recovery, preferences, and authentication.
+- [0.2.0 roadmap](ROADMAP.md) — the next release's UI fixes and acceptance checks.
+- [Maintainer notes](MAINTAINING.md) — architecture, ownership, and behavior contracts.
+- [Upstream README](UPSTREAM_README.md) and [source baseline](upstream.json) — Godit provenance; upstream installation instructions describe Godit.
 
-Confirmation is required before hard resets, destructive cleans, forced pushes, global/system configuration writes, and destructive or shell aliases. Cancelling preserves the typed command. Read-only queries and clean dry runs do not require destructive-command confirmation.
+<a id="testing"></a>
 
-SSH uses per-invocation `ssh -o BatchMode=yes`. GittyDot does not change the editor's SSH environment or adopt repository `core.sshCommand` settings. Configure keys and hosts in your SSH configuration, or explicitly supply a trusted `GIT_SSH_COMMAND`; non-OpenSSH clients may also need `GIT_SSH_VARIANT`.
+## 🧪 Testing
 
-Noninteractive Git prompt/editor environment variables apply while the plugin is enabled and are restored on disable. Git hooks and helpers run with your permissions; GittyDot is not a sandbox for untrusted repositories.
+The latest graphical verification on **2026-10-15** passed **233 editor integration checks**, with **0 failures**, **0 script errors**, and none of the reported Unicode, missing-process, or raw-icon startup diagnostics. It ran on **Godot 4.7.2 / Windows / Git 2.53.0**.
 
-## Local data
+The checks exercise real editor saves and Undo, partial staging, editable comparisons, recovery, historical diffs, selected-commit amendments, console diagnostics, file/folder actions, gutter geometry, and split-pane scrolling. Separate first-install and restart checks verified initialization with GitHub CLI absent.
 
-- Preferences and changelists: `.godot/gittydot/`.
-- Diff, blame, and patch temporary files: `<project-name>-temp-chatgpt/gittydot/`.
-
-The temporary-folder name comes from the development convention used for this fork. It is a local directory, not an integration or callback. Godot ignores it through `.gdignore`; Git ignores it when the installation's `.gitignore` pattern is present.
-
-## Development and verification
-
-The latest verified headless run passed **222 editor integration checks** on Godot 4.7.2 for Windows with Git 2.53.0 and no script errors. The suite covers saving and Undo, partial staging, commit/amend, historical comparisons, split-pane scrolling, gutter geometry, concurrent logging, console confirmation cancellation, plugin reloads, folder right-click actions, and literal ignore rules. Editable-comparison checks cover raw script/scene text, native-tab synchronization, scene reload, auto/manual save, file switching, BOM/CRLF preservation, external changes/deletion, competing native drafts, recovery and read-only snapshots. Selected-commit checks cover exact-hash targeting with duplicate subjects, root/message-only amendments, rejecting hooks, merge refusal, preserved unstaged edits, version errors, Console navigation, confirmation cancellation/retry, and conflict Continue/Abort recovery.
-
-Verification requires Python 3, Git, and the target Godot executable. From the repository root, with `tools/test_gittydot.py` included:
+From the **standalone source repository**, with Python 3, Git, and Godot installed:
 
 ```powershell
 python tools/test_gittydot.py --godot 'C:\Tools\Godot\Godot.exe'
-```
-
-Replace the executable path with your installation. To run the hidden graphical editor checks and capture native highlights and split panes on Windows:
-
-```powershell
 python tools/test_gittydot.py --godot 'C:\Tools\Godot\Godot.exe' --visual
 ```
 
-The runner creates a disposable project and Git repository inside the project-local temp folder. It does not stage or commit the source repository. Result JSON, logs, and graphical captures stay in each test fixture.
+Replace the Godot path with your installation. Test fixtures stay inside the repository's temporary folder and do not stage or commit the source repository. These checks do not establish cross-platform support, all remote authentication setups, every inherited operation, or resolution of the UI issues listed above.
 
-See [MAINTAINING.md](MAINTAINING.md) for implementation ownership, behavior contracts, and upstream-update guidance.
+<a id="feedback"></a>
 
-## Publishing and contributing
+## 💬 Feedback and contributions
 
-This repository contains the runtime addon under `addons/gittydot/`, verification sources under `tests/`, and the runner under `tools/`. Documentation, the upstream baseline, and the MIT license are kept once at the repository root. `*.uid` files are source resource identities and should remain tracked; generated `*.import` files should not. The root `.gdignore` prevents a containing Godot project from importing this repository as a second addon copy. Install only the addon directory and license. Keep game-specific scenes, assets, `.godot/` data, local settings, temporary fixtures, and generated exports out of the plugin distribution.
+[Report a bug or suggest a feature](https://github.com/Shinydarkraii/gittydot/issues). For bugs, include your Godot and Git versions, operating system, reproduction steps, and relevant screenshots or errors. Remove credentials from logs before sharing them.
 
-Report issues with the Godot version, operating system, reproduction steps, and relevant editor errors or screenshots. Changes to Git operations should preserve partial staging, editor drafts, and native Undo. Verify changes in an isolated test project before submitting a pull request.
+Contributions should preserve editor drafts, Undo, partial staging, and the Git backend's existing behavior. Read the [maintainer notes](MAINTAINING.md) and test changes in an isolated project.
 
-## Current limitations
+<a id="credits"></a>
 
-The planned **0.2.0** fixes are tracked in [ROADMAP.md](ROADMAP.md): narrow Commit dock alignment and visible staging checkboxes, editable-diff change signs and navigation, matching committed-diff colors, and reliable Open in Editor behavior.
+## © Credits and license
 
-- This is an early fork, not a complete reproduction of IntelliJ's Git interface.
-- Multiple concurrent diff tabs, broader keyboard shortcuts, and further image/scene workflow polish remain planned work.
-- Native FileSystem decorations depend on Godot's internal editor controls and need verification after engine upgrades.
-- Automated checks do not establish remote authentication behavior, every inherited Git operation, or compatibility outside the verified configuration.
+The GittyDot fork is maintained by [Shinydarkraii](https://github.com/Shinydarkraii). Its Git backend and many widgets originate in **Godit**, created by **Michal Rychtar**. The original copyright and attribution are retained under the [MIT License](LICENSE).
 
-## Credits and license
-
-GittyDot uses the [Godit](https://github.com/rychtar/godit) backend and existing Git widgets, originally authored by **Michal Rychtar**. GittyDot contributors maintain the editor integration and regression checks described here.
-
-Released under the **MIT License**. The original copyright and license notice are preserved in [LICENSE](LICENSE). [UPSTREAM_README.md](UPSTREAM_README.md) preserves the upstream documentation; [upstream.json](upstream.json) records the source package baseline.
+Development has used AI assistance for code, documentation, and verification work. The GittyDot icon was generated from the maintainer's sketch using an image generation tool.

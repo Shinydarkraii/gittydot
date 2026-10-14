@@ -51,6 +51,7 @@ func _run() -> void:
 		_finish()
 		return
 	var repo: RefCounted = _fork.dock_instance._repo
+	_check_startup_helpers()
 	await _check_console_safety(repo)
 	await _check_folder_actions(repo)
 	var restore_patch: String = repo.get_diff("tracked.gd", true)
@@ -802,6 +803,24 @@ func _check_diff_panes() -> void:
 	Settings.set_value("diff_side_by_side", true)
 	shell.queue_free()
 	await get_tree().process_frame
+
+
+func _check_startup_helpers() -> void:
+	var icon: Texture2D = _fork._get_plugin_icon()
+	var side := maxi(1, roundi(16 * EditorInterface.get_editor_scale()))
+	check("plugin artwork loads at toolbar size without raw-resource warnings", icon != null and icon.get_size() == Vector2(side, side))
+	var root := ProjectSettings.globalize_path("res://").trim_suffix("/")
+	var scratch := root.path_join(root.get_file() + "-temp-chatgpt/cli-path with spaces")
+	DirAccess.make_dir_recursive_absolute(scratch)
+	check("optional CLI candidates exclude missing executables", RepoSetup.gh_candidates("Windows", scratch).is_empty())
+	var file := FileAccess.open(scratch.path_join("gh.exe" if OS.get_name() == "Windows" else "gh"), FileAccess.WRITE)
+	file.store_string("Discovery fixture, never executed")
+	file.close()
+	var separator := ";" if OS.get_name() == "Windows" else ":"
+	var search_path := '"' + scratch + '"' + separator + scratch
+	var candidates := RepoSetup.gh_candidates(OS.get_name(), search_path)
+	check("CLI discovery keeps paths with spaces and deduplicates PATH entries", candidates.size() == 1 and candidates[0] == scratch.path_join("gh.exe" if OS.get_name() == "Windows" else "gh"))
+	check("Windows CLI discovery never adds macOS fallback locations", RepoSetup.gh_candidates("Windows", "").is_empty())
 
 
 func _check_console_safety(repo: RefCounted) -> void:

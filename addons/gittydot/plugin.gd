@@ -115,9 +115,21 @@ func _get_plugin_name() -> String:
 
 func _get_plugin_icon() -> Texture2D:
 	# Keep the full-resolution artwork while sizing its toolbar texture for editor DPI.
-	var image := Image.load_from_file(PluginIconPath)
+	var image: Image
+	if ResourceLoader.exists(PluginIconPath, "Texture2D"):
+		var texture := load(PluginIconPath) as Texture2D
+		if texture != null:
+			image = texture.get_image()
+	# On first installation the PNG importer may not have run yet. Decode the
+	# packaged editor-only artwork without Image.load_from_file's export warning.
+	if image == null and FileAccess.file_exists(PluginIconPath):
+		image = Image.new()
+		if image.load_png_from_buffer(FileAccess.get_file_as_bytes(PluginIconPath)) != OK:
+			image = null
 	if image == null or image.is_empty():
 		return EditorInterface.get_base_control().get_theme_icon("VCSBranches", "EditorIcons")
+	if image.is_compressed():
+		image.decompress()
 	var side := maxi(1, roundi(16 * EditorInterface.get_editor_scale()))
 	image.resize(side, side, Image.INTERPOLATE_LANCZOS)
 	return ImageTexture.create_from_image(image)

@@ -161,7 +161,10 @@ renderer/rendering_method="gl_compatibility"
     output = log.read_text(encoding='utf-8')
     script_errors = re.findall(r'^.*(?:SCRIPT ERROR:|Parse Error:|Failed to load script).*$'
                                , output, flags=re.MULTILINE)
+    startup_errors = re.findall(r'^.*(?:Unicode parsing error|Loaded resource as image file|Could not create child process).*$'
+                                , output, flags=re.MULTILINE)
     print(f"GittyDot: {report['passed']} passed, {report['failed']} failed; {len(script_errors)} script errors")
+    print(f'Startup diagnostics: {len(startup_errors)}')
     print(f'Report: {report_path}')
     if args.visual:
         print(f'Native preview: {fixture / "inline-highlights.png"}')
@@ -170,7 +173,9 @@ renderer/rendering_method="gl_compatibility"
             print('FAIL:', entry['name'])
     for error in script_errors:
         print(error)
-    if run.returncode or report['failed'] or script_errors:
+    for error in startup_errors:
+        print(error)
+    if run.returncode or report['failed'] or script_errors or startup_errors:
         raise SystemExit(1)
 
 

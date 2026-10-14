@@ -1,1 +1,7 @@
 * text=auto eol=lf
+
+# GitHub source downloads contain the installable addon only.
+# Contributor docs, tests, tooling and local agent files stay in the repository.
+/** export-ignore
+/addons !export-ignore
+/addons/** !export-ignore

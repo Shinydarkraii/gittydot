@@ -11,8 +11,8 @@ const GITATTRIBUTES_LINES := ["* text=auto eol=lf"]
 ## Binary assets worth keeping out of the regular history once they add up.
 const LFS_PATTERNS := ["*.png", "*.jpg", "*.jpeg", "*.webp", "*.exr", "*.hdr", "*.psd", "*.wav", "*.ogg", "*.mp3",
 		"*.glb", "*.fbx", "*.blend", "*.obj", "*.ttf", "*.otf", "*.mp4", "*.ogv"]
-## GUI apps on macOS don't get the shell's PATH, so Homebrew's gh isn't found by name alone.
-const GH_CANDIDATES := ["gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"]
+## GUI apps on macOS don't always get the shell's PATH.
+const MACOS_GH_DIRECTORIES := ["/opt/homebrew/bin", "/usr/local/bin"]
 
 
 static func git_available() -> bool:
@@ -25,13 +25,30 @@ static func lfs_available() -> bool:
 
 ## Path of a logged-in GitHub CLI, or "". Coroutine: `gh auth status` asks the network, so it runs on a thread.
 static func find_gh() -> String:
-	for candidate in GH_CANDIDATES:
+	for candidate in gh_candidates(OS.get_name(), OS.get_environment("PATH")):
 		var run := _ProgramRun.new()
 		run.start(candidate, ["auth", "status"])
 		var result: Dictionary = await run.finished
 		if result["exit_code"] == 0:
 			return candidate
 	return ""
+
+
+## Optional CLI discovery must not launch missing programs (Godot logs an error).
+## Resolve PATH directly, without a shell, keeping paths with spaces intact.
+static func gh_candidates(platform: String, search_path: String) -> PackedStringArray:
+	var directories := Array(search_path.split(";" if platform == "Windows" else ":", false))
+	if platform == "macOS":
+		directories.append_array(MACOS_GH_DIRECTORIES)
+	var result := PackedStringArray()
+	for directory: String in directories:
+		var folder := directory.strip_edges().trim_prefix("\"").trim_suffix("\"")
+		if folder.is_empty():
+			continue
+		var candidate := folder.path_join("gh.exe" if platform == "Windows" else "gh").simplify_path()
+		if FileAccess.file_exists(candidate) and not result.has(candidate):
+			result.append(candidate)
+	return result
 
 
 ## True if git has a user.name and user.email to commit with.
