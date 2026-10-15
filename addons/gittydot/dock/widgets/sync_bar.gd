@@ -32,6 +32,7 @@ var _push_menu: MenuButton
 var _pull_autostash := false
 ## Local branch names in the switcher popup, by item id.
 var _menu_branches: Array = []
+var _compact := false
 
 
 func _init() -> void:
@@ -41,6 +42,8 @@ func _init() -> void:
 
 	_branch_button = MenuButton.new()
 	_branch_button.flat = false
+	_branch_button.clip_text = true
+	_branch_button.size_flags_horizontal = SIZE_EXPAND_FILL
 	_branch_button.tooltip_text = "Current branch — click to switch"
 	_branch_button.about_to_popup.connect(_fill_branch_menu)
 	_branch_button.get_popup().id_pressed.connect(_on_branch_menu_id_pressed)
@@ -87,6 +90,35 @@ func _init() -> void:
 	operation_bar = OperationBar.new()
 	_own_operation_bar = operation_bar
 	add_child(operation_bar)
+	resized.connect(_fit_width)
+
+
+func _fit_width() -> void:
+	_compact = size.x < 420 * EditorInterface.get_editor_scale()
+	get_child(0).add_theme_constant_override("separation", 1 if _compact else 4)
+	for child in get_child(0).get_children():
+		if child is not Button:
+			continue
+		child.clip_text = child == _branch_button
+		child.icon = child.get_meta("full_icon") if not _compact and child.has_meta("full_icon") else null
+		child.custom_minimum_size.x = 24 * EditorInterface.get_editor_scale() if _compact else 0
+		if child.has_meta("icon_name"):
+			child.text = "↻" if _compact else ""
+		for state in ["normal", "hover", "pressed", "disabled", "hover_pressed", "normal_mirrored", "hover_mirrored", "pressed_mirrored", "disabled_mirrored", "hover_pressed_mirrored"]:
+			if _compact:
+				var style := child.get_theme_stylebox(state).duplicate() as StyleBox
+				style.content_margin_left = 2 * EditorInterface.get_editor_scale()
+				style.content_margin_right = 2 * EditorInterface.get_editor_scale()
+				child.add_theme_stylebox_override(state, style)
+			else:
+				child.remove_theme_stylebox_override(state)
+	_upstream_label.visible = not _compact
+	for button in [_fetch_button, _pull_button, _push_button]:
+		button.text = ("↻" if button == _fetch_button else ("↓" if button == _pull_button else "↑")) if _compact else button.get_meta("full_text", "Fetch" if button == _fetch_button else ("Pull" if button == _pull_button else "Push"))
+	var tiny := size.x < 260 * EditorInterface.get_editor_scale()
+	_branch_button.text = "⎇" if tiny else _branch_button.get_meta("full_text", _branch_button.text)
+	_branch_button.clip_text = not tiny
+	_branch_button.custom_minimum_size.x = 24 * EditorInterface.get_editor_scale() if tiny else 0
 
 
 func _notification(what: int) -> void:
@@ -103,7 +135,9 @@ func _notification(what: int) -> void:
 
 func _set_icon(button: Button, icon_name: StringName) -> void:
 	if has_theme_icon(icon_name, &"EditorIcons"):
-		button.icon = get_theme_icon(icon_name, &"EditorIcons")
+		var icon := get_theme_icon(icon_name, &"EditorIcons")
+		button.set_meta("full_icon", icon)
+		button.icon = null if _compact else icon
 
 
 func _button(row: HBoxContainer, text: String, tooltip: String, on_pressed: Callable) -> Button:
@@ -155,6 +189,7 @@ func refresh() -> void:
 	var s: Dictionary = _repo.get_sync_status()
 	var detached: bool = s["branch"].is_empty()
 	_branch_button.text = ("⎇ " + s["branch"]) if not detached else "⎇ detached HEAD"
+	_branch_button.set_meta("full_text", _branch_button.text)
 	_branch_button.icon_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 
 	var op: Dictionary = _repo.get_operation_state()
@@ -182,6 +217,10 @@ func refresh() -> void:
 		control.disabled = detached
 	if detached:
 		_push_button.tooltip_text = "HEAD is detached — checkout a branch to push"
+	for button in [_pull_button, _push_button]:
+		button.set_meta("full_text", button.text)
+	_branch_button.tooltip_text = "Current branch: %s\n%s\nClick to switch" % [s["branch"] if not detached else "detached HEAD", _upstream_label.tooltip_text]
+	_fit_width()
 
 
 func _fill_branch_menu() -> void:

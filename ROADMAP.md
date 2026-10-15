@@ -1,6 +1,6 @@
 # GittyDot 0.2.0
 
-Status: planned. The current package remains 0.1.0. This backlog records the user's reported issues with the Commit dock and editable working-file comparisons. Release 0.2.0 should address all five items below; a recorded requirement is not a completed fix.
+Status: implemented and verified locally on 2026-10-15 for release 0.2.0. All five items below are included. The acceptance criteria are retained for future regression checks. Verification includes 265 graphical integration checks, focused graphical checks at 100% and 150% editor scale, 320/260/220/200 logical-pixel Commit captures, overview navigation after editing/Undo, shared palette pixel checks, and updated existing/new/untracked script opening. Tested configuration remains Windows / Godot 4.7.2 / Git 2.53.0; other platforms and versions remain unverified.
 
 ## 1. Narrow Commit dock
 
@@ -8,7 +8,7 @@ Status: planned. The current package remains 0.1.0. This backlog records the use
 - Keep staging checkboxes visible and usable at the right edge, including checked, unchecked and partially checked folder/group states.
 - Truncate long names at the end with an ellipsis and expose the full path in a tooltip. Preserve indentation and expand/collapse affordances.
 - Reflow or compact toolbars at narrow widths rather than letting their minimum widths displace the whole layout. Match the native Scene dock's behavior as the reference.
-- Investigate minimum-width propagation, centered horizontal growth and clipping in the dock layout. The screenshot establishes clipping; its precise runtime cause still needs a resize reproducer.
+- Verified cause and fix: the longest-item OptionButton minimum and sync-toolbar minima displaced centered-growing containers. Disable longest-item fitting, keep the layout origin left, and compact all toolbar style states. The resize regression captures all four target widths.
 
 Acceptance: resize the dock through approximately 320, 260, 220 and 200 logical pixels, and repeat at increased editor scale. Test long names, nested folders, a long branch/changelist name and partial staging. Prefixes remain visible; checkboxes can still be toggled without a horizontal scroll workaround.
 
@@ -49,7 +49,7 @@ Primary implementation areas: `working_diff.gd`, `diff_view.gd` palette constant
 
 - Enable Open in Editor for an existing project-local script and open its updated working-file contents in Godot's Script editor.
 - Flush comparison edits first. Preserve competing unsaved native drafts and report save/open failures with the existing Console-details action.
-- Review the current ResourceLoader.exists-based enablement condition. A normal existing .gd file is intended to be enabled; the reported disabled-script case needs reproduction before assigning its exact cause.
+- Script enablement now checks project-local disk presence directly, including a script created after import. Open refreshes clean cached scripts, preserves native drafts, and flushes pending comparison edits before switching editors.
 - Handle newly created/untracked scripts and resource-cache/import timing. Show a clear reason when the action is unavailable for an actually missing, unsupported or out-of-project file.
 
 Acceptance: modified, partially staged, newly created and untracked .gd files open with the updated contents. Repeat immediately after editing, with auto-save disabled, and while the native script editor has an unsaved draft. Historical comparisons open the available current working file; deleted files explain why opening is unavailable.

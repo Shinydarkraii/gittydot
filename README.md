@@ -7,7 +7,7 @@
 <p align="center"><strong>Review changes, edit diffs, and commit without leaving Godot.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-589eff" alt="Version 0.1.0">
+  <img src="https://img.shields.io/badge/version-0.2.0-589eff" alt="Version 0.2.0">
   <img src="https://img.shields.io/badge/Godot-tested%20on%204.7.2-478cbf" alt="Tested on Godot 4.7.2">
   <img src="https://img.shields.io/badge/platform-verified%20on%20Windows-626b78" alt="Verified on Windows">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f47c76" alt="MIT license"></a>
@@ -28,7 +28,7 @@ GittyDot brings an IntelliJ-inspired Git workflow to the Godot editor: a focused
 It is a fork of [Godit](https://github.com/rychtar/godit) 1.1.1, retaining its Git CLI backend and extending its editor integration. GittyDot runs your installed `git` from GDScript; it does not need the Godot Git GDExtension or a separate Version Control plugin.
 
 > [!IMPORTANT]
-> **0.1.0 is an early release.** The verified configuration is **Godot 4.7.2 on Windows**. Other engine versions, operating systems, and every inherited Git operation have not been validated. The known UI issues below are planned for **0.2.0**.
+> **0.2.0 is an early release.** The verified configuration is **Godot 4.7.2 on Windows**. Other engine versions, operating systems, and every inherited Git operation have not been validated. This update addresses the five UI issues recorded for 0.2.0.
 
 <a id="features"></a>
 
@@ -39,6 +39,7 @@ It is a fork of [Godit](https://github.com/rychtar/godit) 1.1.1, retaining its G
 - **File and folder actions:** right-click to stage, unstage, add new files, move changes to a changelist, or add literal paths to `.gitignore`. Ignoring a tracked file does not remove it from Git.
 - **Central diff editor:** choose **Side by side** or **Unified**, resize the split, and scroll both panes together. Scrollbars appear when content overflows.
 - **Editable working-file comparisons:** edit the right pane in **Latest commit → Working file** or **Unstaged changes**. Save manually or use auto-save; staged snapshots and historical versions remain read-only.
+- **Finding changes:** fixed +/− gutters and a clickable overview show changed ranges and the current viewport in editable comparisons, including deletion boundaries. Both remain visible while scrolling horizontally.
 - **Inline script changes:** grouped gutter markers and character highlights show edits in Godot's Script editor. Click a marker to inspect the previous code, navigate changes, roll back a hunk, or open its diff.
 - **Automatic saving:** project-backed scripts and editable working-file comparisons save after a **350 ms editing pause**, preserving Undo and leaving staging untouched.
 - **Commit history:** inspect the commit graph, search history, review file history, and double-click a changed file to open its diff in the main screen. Initial commits compare against an empty baseline.
@@ -80,6 +81,7 @@ Keep the folder named **`gittydot`**, directly under `addons/`. Enable only one 
 - The project must be inside a Git repository; GittyDot can initialize one through its dock.
 - Configure Git authentication before using remote operations.
 - **Git 2.45.0+** is required specifically for amending an older commit.
+- On Windows, GittyDot disables the legacy experimental filesystem-monitor option in its Git child commands. Git older than 2.37 also runs with filesystem monitoring disabled; this does not change global Git configuration.
 - **Git LFS** is optional, needed when using the LFS helpers.
 - **GitHub CLI (`gh`)** is optional, used only to create/publish a GitHub repository from the initialization dialog. Missing installations are skipped quietly.
 
@@ -113,12 +115,7 @@ Editable panes show complete documents. Collapsed context, patch buttons, whites
 
 ## ⚠️ Known limitations
 
-The [0.2.0 roadmap](ROADMAP.md) tracks these reported issues in **0.1.0**:
-
-- A narrow Commit dock can clip filename prefixes and hide staging checkboxes.
-- Editable comparisons do not yet have the change signs, change gutter, or minimap needed to find edits easily.
-- Editable-diff colors still need to match the committed-diff renderer.
-- **Open in Editor** can be unavailable in reported script cases; further reproduction and fixes are planned.
+The [0.2.0 acceptance checklist](ROADMAP.md) records the completed Commit dock, change gutter, overview, diff palette, and Open in Editor improvements.
 
 Editable comparisons currently support existing project-local UTF-8 files up to **2 MiB / 20,000 lines**. File symlinks, binaries, images, deleted files, staged snapshots, and historical revisions are read-only.
 
@@ -141,7 +138,7 @@ Git hooks and helpers run with your permissions. GittyDot does not sandbox repos
 ## 📖 Documentation
 
 - [Usage guide](GUIDE.md) — comparisons, staging, amend, auto-save, recovery, preferences, and authentication.
-- [0.2.0 roadmap](ROADMAP.md) — the next release's UI fixes and acceptance checks.
+- [0.2.0 roadmap](ROADMAP.md) — implemented UI fixes and acceptance checks.
 - [Maintainer notes](MAINTAINING.md) — architecture, ownership, and behavior contracts.
 - [Upstream README](UPSTREAM_README.md) and [source baseline](upstream.json) — Godit provenance; upstream installation instructions describe Godit.
 
@@ -149,7 +146,7 @@ Git hooks and helpers run with your permissions. GittyDot does not sandbox repos
 
 ## 🧪 Testing
 
-The latest graphical verification on **2026-10-15** passed **233 editor integration checks**, with **0 failures**, **0 script errors**, and none of the reported Unicode, missing-process, or raw-icon startup diagnostics. It ran on **Godot 4.7.2 / Windows / Git 2.53.0**.
+The latest graphical verification on **2026-10-15** passed **265 editor integration checks**, with **0 failures**, **0 script errors**, 0 engine errors, and none of the reported Unicode, missing-process, or raw-icon startup diagnostics. It ran on **Godot 4.7.2 / Windows / Git 2.53.0**. A separate 34-check graphical compatibility run also passed using Git 2.36.1.
 
 The checks exercise real editor saves and Undo, partial staging, editable comparisons, recovery, historical diffs, selected-commit amendments, console diagnostics, file/folder actions, gutter geometry, and split-pane scrolling. Separate first-install and restart checks verified initialization with GitHub CLI absent.
 
@@ -160,7 +157,7 @@ python tools/test_gittydot.py --godot 'C:\Tools\Godot\Godot.exe'
 python tools/test_gittydot.py --godot 'C:\Tools\Godot\Godot.exe' --visual
 ```
 
-Replace the Godot path with your installation. Test fixtures stay inside the repository's temporary folder and do not stage or commit the source repository. These checks do not establish cross-platform support, all remote authentication setups, every inherited operation, or resolution of the UI issues listed above.
+Replace the Godot path with your installation. Test fixtures stay inside the repository's temporary folder and do not stage or commit the source repository. These checks do not establish cross-platform support, all remote authentication setups, every inherited operation.
 
 <a id="feedback"></a>
 

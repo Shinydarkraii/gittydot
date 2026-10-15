@@ -15,6 +15,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--godot', type=Path, required=True, help='Godot 4.7.2 executable')
     parser.add_argument('--visual', action='store_true', help='Use a hidden graphical editor and capture the native highlight preview')
+    parser.add_argument('--ui-only', action='store_true', help='Run the focused dock and editable comparison regressions')
+    parser.add_argument('--editor-scale', type=float, default=1.0, choices=[1.0, 1.5, 2.0], help='Portable test editor display scale')
     parser.add_argument('--git', type=Path, help='Git executable for this test process and its disposable editor only')
     args = parser.parse_args()
     if args.git:
@@ -42,13 +44,23 @@ enabled=PackedStringArray("res://addons/gittydot/plugin.cfg", "res://addons/gitt
 [rendering]
 renderer/rendering_method="gl_compatibility"
 ''', encoding='utf-8')
+    # Some managed Windows hosts cannot enumerate the user's root store.
+    # Use Git's existing trusted CA bundle in this disposable project only.
+    git_binary = args.git or Path(shutil.which('git') or 'git')
+    ca_bundle = git_binary.resolve().parents[1] / 'mingw64/etc/ssl/certs/ca-bundle.crt'
+    if ca_bundle.is_file():
+        shutil.copyfile(ca_bundle, fixture / 'test-ca-bundle.crt')
+        with (fixture / 'project.godot').open('a', encoding='utf-8') as config:
+            config.write('\n[network]\ntls/certificate_bundle_override="res://test-ca-bundle.crt"\n')
     (fixture / '.gitignore').write_text('.godot/\n*-temp-chatgpt/\n', encoding='utf-8')
 
     def git(*command: str) -> None:
-        subprocess.run(['git', '-C', str(fixture), *command], check=True, capture_output=True, text=True)
+        subprocess.run(['git', '-c', 'core.useBuiltinFSMonitor=false', '-c', 'core.fsmonitor=false', '-C', str(fixture), *command], check=True, capture_output=True, text=True)
 
     git('init', '-b', 'main')
     git('config', 'core.autocrlf', 'false')
+    git('config', 'core.useBuiltinFSMonitor', 'false')
+    git('config', 'core.fsmonitor', 'false')
     git('config', 'user.name', 'GittyDot Tests')
     git('config', 'user.email', 'gittydot-tests@localhost')
     tracked = fixture / 'tracked.gd'
@@ -91,13 +103,13 @@ renderer/rendering_method="gl_compatibility"
         file.write_text('untracked content\n', encoding='utf-8', newline='\n')
 
     # Separate histories isolate destructive rewrite tests from editor fixtures.
-    for case in ['amend', 'amend_conflict', 'amend_continue', 'amend_hook', 'amend_merge']:
+    for case in ([] if args.ui_only else ['amend', 'amend_conflict', 'amend_continue', 'amend_hook', 'amend_merge']):
         history_repo = fixture / f'{fixture.name}-temp-chatgpt' / case
         history_repo.mkdir(parents=True)
         (history_repo.parent / '.gdignore').write_text('', encoding='utf-8')
 
         def history_git(*command: str) -> None:
-            subprocess.run(['git', '-C', str(history_repo), *command], check=True, capture_output=True, text=True)
+            subprocess.run(['git', '-c', 'core.useBuiltinFSMonitor=false', '-c', 'core.fsmonitor=false', '-C', str(history_repo), *command], check=True, capture_output=True, text=True)
 
         history_git('init', '-b', 'main')
         history_git('config', 'core.autocrlf', 'false')
@@ -134,13 +146,24 @@ renderer/rendering_method="gl_compatibility"
             hook.chmod(0o755)
 
     # A portable copy keeps editor settings inside the project during headless checks.
-    engine_dir = work / 'engine'
+    engine_dir = work / ('engine' if args.editor_scale == 1.0 else f'engine-scale-{args.editor_scale}')
     engine_dir.mkdir(exist_ok=True)
     engine = engine_dir / 'godot.exe'
     if args.godot.resolve() != engine.resolve():
         if not engine.exists() or engine.stat().st_size != args.godot.stat().st_size:
             shutil.copyfile(args.godot, engine)
     (engine_dir / '._sc_').write_text('', encoding='utf-8')
+    editor_data = engine_dir / 'editor_data'
+    editor_data.mkdir(exist_ok=True)
+    settings = editor_data / 'editor_settings-4.7.tres'
+    config = settings.read_text(encoding='utf-8') if settings.exists() else '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n'
+    overrides = {'interface/editor/appearance/display_scale': '7', 'interface/editor/appearance/custom_display_scale': str(args.editor_scale), 'network/connection/check_for_updates': '0'}
+    if ca_bundle.is_file():
+        overrides['network/tls/editor_tls_certificates'] = json.dumps((fixture / 'test-ca-bundle.crt').as_posix())
+    for key, value in overrides.items():
+        line = f'{key} = {value}'
+        config = re.sub(r'^' + re.escape(key) + r' = .*$', line, config, flags=re.MULTILINE) if key + ' = ' in config else config + line + '\n'
+    settings.write_text(config, encoding='utf-8')
     log = fixture / 'editor.log'
     command = [str(engine), '--editor', '--path', str(fixture), '--log-file', str(log)]
     startup = None
@@ -151,6 +174,10 @@ renderer/rendering_method="gl_compatibility"
         startup.wShowWindow = 0  # SW_HIDE: no interactive window is needed.
     else:
         command.insert(1, '--headless')
+    if args.ui_only:
+        if '--' not in command:
+            command.append('--')
+        command.append('--gittydot-ui-only')
     run = subprocess.run(command, capture_output=True, text=True, timeout=90, startupinfo=startup)
     report_path = fixture / 'integration-result.json'
     if not report_path.exists():
@@ -163,8 +190,10 @@ renderer/rendering_method="gl_compatibility"
                                , output, flags=re.MULTILINE)
     startup_errors = re.findall(r'^.*(?:Unicode parsing error|Loaded resource as image file|Could not create child process).*$'
                                 , output, flags=re.MULTILINE)
+    engine_errors = re.findall(r'^ERROR:.*$', output, flags=re.MULTILINE)
     print(f"GittyDot: {report['passed']} passed, {report['failed']} failed; {len(script_errors)} script errors")
     print(f'Startup diagnostics: {len(startup_errors)}')
+    print(f'Engine errors: {len(engine_errors)}')
     print(f'Report: {report_path}')
     if args.visual:
         print(f'Native preview: {fixture / "inline-highlights.png"}')
@@ -175,7 +204,9 @@ renderer/rendering_method="gl_compatibility"
         print(error)
     for error in startup_errors:
         print(error)
-    if run.returncode or report['failed'] or script_errors or startup_errors:
+    for error in engine_errors:
+        print(error)
+    if run.returncode or report['failed'] or script_errors or startup_errors or engine_errors:
         raise SystemExit(1)
 
 

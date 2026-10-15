@@ -189,7 +189,7 @@ func _ready() -> void:
 	$Layout.move_child(_op_banner, 1)
 
 	var stash_button := Button.new()
-	stash_button.text = "Stash…"
+	stash_button.text = "…"
 	stash_button.flat = true
 	stash_button.tooltip_text = "Stash uncommitted changes (put them aside and clean the working tree)"
 	stash_button.pressed.connect(_on_stash_button_pressed)
@@ -420,6 +420,7 @@ func refresh(status_entries: Variant = null) -> void:
 	_suppress_item_edited = false
 
 	_update_changelist_option(counts)
+	_clip_tree_labels(root)
 	_reselect(root, selected_path, scroll_y)
 	if op["kind"] == "merge" and _commit_message.text.strip_edges().is_empty() and not op["detail"].is_empty():
 		_commit_message.text = _repo.get_merge_message()
@@ -433,6 +434,17 @@ func refresh(status_entries: Variant = null) -> void:
 	_update_commit_buttons_enabled(any_staged)
 	change_count = tracked_count + untracked_count
 	changes_counted.emit(change_count)
+
+
+func _clip_tree_labels(item: TreeItem) -> void:
+	item.set_text_overrun_behavior(TEXT_COLUMN, TextServer.OVERRUN_TRIM_ELLIPSIS)
+	var meta: Variant = item.get_metadata(0)
+	if meta is Dictionary and meta.get("kind", "") == "folder":
+		item.set_tooltip_text(TEXT_COLUMN, meta.get("dir", ""))
+	elif item.get_tooltip_text(TEXT_COLUMN).is_empty():
+		item.set_tooltip_text(TEXT_COLUMN, item.get_text(TEXT_COLUMN))
+	for child in item.get_children():
+		_clip_tree_labels(child)
 
 
 ## Flags rows whose file the upstream changed too (pulling may conflict); returns incoming_overlap() for the status line.
@@ -904,6 +916,7 @@ func _update_changelist_option(counts: Dictionary = {}) -> void:
 		_changelist_option.add_item("Changelist: %s%s" % [names[i], "  (%d)" % count if count > 0 else ""])
 		if names[i] == _changelist_state["active"]:
 			_changelist_option.select(i)
+	_changelist_option.tooltip_text = "Active changelist: %s\nCommit includes this changelist's staged files." % _changelist_state["active"]
 
 
 ## Post-order walk that counts a group/folder's files (for the "N files"
@@ -1874,10 +1887,20 @@ func _show_error(title: String, message: String) -> void:
 
 ## A focused commit dock: the large diff lives in the main GittyDot screen.
 func _configure_commit_layout() -> void:
+	# Anchored Controls otherwise grow equally left/right when children exceed
+	# the available width. Keep the origin stable and remove inherited wide minima.
+	grow_horizontal = Control.GROW_DIRECTION_END
+	$Layout.grow_horizontal = Control.GROW_DIRECTION_END
+	$Layout/Split/Left.custom_minimum_size.x = 0
+	_changelist_option.custom_minimum_size.x = 0
+	_changelist_option.fit_to_longest_item = false
+	_tree.set_column_clip_content(TEXT_COLUMN, true)
+	_tree.set_column_custom_minimum_width(TEXT_COLUMN, 0)
+	_tree.scroll_horizontal_enabled = false
 	_diff_view.hide()
 	_diff_toggle.hide()
 	_tree.gui_input.connect(_on_gittydot_tree_input)
-	_tree.set_column_custom_minimum_width(CHECKBOX_COLUMN, 30)
+	_tree.set_column_custom_minimum_width(CHECKBOX_COLUMN, UiScale.px(30))
 	_commit_message.custom_minimum_size.y = UiScale.px(110)
 	_commit_message.placeholder_text = "Commit message…\nCtrl+Enter to commit"
 	var left: VBoxContainer = $Layout/Split/Left
@@ -1898,6 +1921,11 @@ func _configure_commit_layout() -> void:
 	_commit_push_button.tooltip_text = "Commit selected staged changes, then push to the configured remote"
 	_amend_check.tooltip_text = "Amend the target commit using the selected staged changes and message"
 	_build_amend_menu()
+	_amend_menu.custom_minimum_size.x = 0
+	for child in %ChangelistRow.get_children():
+		if child is Button:
+			child.clip_text = child == _changelist_option
+			child.custom_minimum_size.x = 0
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_commit_message.focus_mode = Control.FOCUS_ALL
 

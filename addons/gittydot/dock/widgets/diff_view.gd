@@ -851,12 +851,12 @@ class DiffRows:
 	var BUTTON_GAP := UiScale.px(6.0)
 	var SIDE_GAP := UiScale.px(6.0)
 
-	const COLOR_ADDED_BG := Color(0.208, 0.408, 0.235, 0.35)
-	const COLOR_REMOVED_BG := Color(0.443, 0.176, 0.192, 0.35)
-	const COLOR_ADDED_HL := Color(0.239, 0.541, 0.267, 0.9)
-	const COLOR_REMOVED_HL := Color(0.545, 0.157, 0.184, 0.9)
-	const COLOR_ADDED_TEXT := Color(0.643, 0.851, 0.667)
-	const COLOR_REMOVED_TEXT := Color(0.925, 0.588, 0.604)
+	const COLOR_ADDED_BG := preload("res://addons/gittydot/util/diff_palette.gd").ADDED_BG
+	const COLOR_REMOVED_BG := preload("res://addons/gittydot/util/diff_palette.gd").REMOVED_BG
+	const COLOR_ADDED_HL := preload("res://addons/gittydot/util/diff_palette.gd").ADDED_HL
+	const COLOR_REMOVED_HL := preload("res://addons/gittydot/util/diff_palette.gd").REMOVED_HL
+	const COLOR_ADDED_TEXT := preload("res://addons/gittydot/util/diff_palette.gd").ADDED_TEXT
+	const COLOR_REMOVED_TEXT := preload("res://addons/gittydot/util/diff_palette.gd").REMOVED_TEXT
 	const COLOR_CONTEXT_TEXT := Color(0.78, 0.78, 0.8)
 	const COLOR_NOISE_TEXT := Color(0.6, 0.6, 0.64, 0.55)
 	const COLOR_LINE_NO := Color(0.45, 0.45, 0.5)

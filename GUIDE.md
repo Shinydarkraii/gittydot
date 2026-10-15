@@ -1,6 +1,6 @@
 # GittyDot usage guide
 
-Detailed workflow instructions for **GittyDot 0.1.0**. Start with the [README](README.md) for installation, requirements, features, and known limitations.
+Detailed workflow instructions for **GittyDot 0.2.0**. Start with the [README](README.md) for installation, requirements, features, and known limitations.
 
 ## Workflow
 
@@ -14,9 +14,13 @@ Use the dropdown beside **Open in Editor** to choose **Side by side** or **Unifi
 
 In **Side by side**, **Latest commit → Working file** and **Unstaged changes** let you edit the working file on the right. The left version stays read-only. Editable comparisons show complete documents without collapsed separators or padding lines; vertical scrolling follows corresponding source lines across insertions/deletions. Use **Save**, **Ctrl/Cmd+S**, or the default 350 ms auto-save. Undo remains available after saving, and saves leave staging untouched. Selecting a different file or starting a Git operation flushes pending comparison edits first.
 
+Editable panes have fixed, non-editable +/− gutters: replacements show − on the previous version and + on the working version. Continuous bars group adjacent edits; a red boundary marks a deletion with no surviving working line. The overview at each pane’s right edge shows changed ranges and an outline of the visible portion. Click a gutter or overview marker to reveal a change without moving the caret or changing source text. Workspace addition/deletion colors match read-only comparisons; native Script editor decorations keep their existing modification colors.
+
 Hunk/line patch buttons, collapsed context, whitespace/noise filtering and the structured **Scene/Settings** view are disabled in editable comparisons. Use **Unified** for read-only inspection and applicable patch actions, or the **Commit** checkboxes to stage files. Staged snapshots, commit/stash history, images, binary files and deleted files remain read-only. Editable text must be UTF-8, within the current project, up to 2 MiB and 20,000 lines; file symlinks stay read-only.
 
 Comparison saves preserve UTF-8 BOMs, LF/CRLF style and a missing final newline. If the file changes externally, disappears, or has another unsaved draft in Godot's Script/Scene editor, saving pauses and keeps both versions. **Reload** explicitly discards the comparison draft; blocked/unsaved drafts are stored in the project-local temporary folder for recovery after plugin reload. Clean native script tabs are synchronized after saves. **Open in Editor** reloads a clean cached scene from the working file, while preserving unsaved native scenes.
+
+**Open in Editor** first saves pending comparison edits, including with auto-save disabled, then opens the updated working script. Newly created/untracked `.gd` files can open before the FileSystem import scan. Competing native drafts block comparison saves and remain intact; unavailable files explain the reason in the button tooltip. In very narrow Commit docks the branch selector becomes ⎇, Fetch/Refresh become ↻, and Pull/Push become ↓/↑. Hover for full branch names and action details.
 
 ### Stage and commit
 
@@ -62,3 +66,7 @@ Noninteractive Git prompt/editor environment variables apply while the plugin is
 - Diff, blame, and patch temporary files: `<project-name>-temp-chatgpt/gittydot/`.
 
 The temporary-folder name comes from the development convention used for this fork. It is a local directory, not an integration or callback. Godot ignores it through `.gdignore`; Git ignores it when the installation's `.gitignore` pattern is present.
+
+### Older Git for Windows and filesystem monitors
+
+GittyDot passes `core.useBuiltinFSMonitor=false` to Windows Git children so the old experimental daemon cannot be enabled by system Git settings. For Git older than 2.37 (or an unrecognized version), it also passes `core.fsmonitor=false`. Supported newer Git keeps its existing modern monitor opt-in behavior. These overrides apply to GittyDot commands and do not rewrite global Git settings. They reduce exposure to the old monitor; a native git.exe crash still needs its Windows fault report for a definitive diagnosis.

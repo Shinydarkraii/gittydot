@@ -8,14 +8,39 @@ extends RefCounted
 static var open_raw_file: Callable
 
 
+## Enablement uses disk presence for scripts, including files not yet imported.
+static func unavailable_reason(repo_root: String, path: String) -> String:
+	var local := ProjectSettings.localize_path(repo_root.path_join(path).simplify_path())
+	if path.is_empty() or not local.begins_with("res://"):
+		return "This file is outside the current Godot project."
+	if not FileAccess.file_exists(local):
+		return "The current working file is missing or deleted."
+	if local.get_extension() in ["gd", "cs", "tscn", "scn"] or ResourceLoader.exists(local):
+		return ""
+	return "This file has no native Godot editor. Use the comparison to inspect it."
+
+
 ## The repo root isn't necessarily the Godot project root, so this resolves
 ## through an absolute path rather than assuming path is already
 ## res://-relative. Returns an error message to show, or "" on success.
 static func open_file(repo_root: String, path: String) -> String:
-	var abs_path := repo_root.path_join(path)
+	var abs_path := repo_root.path_join(path).simplify_path()
 	var res_path := ProjectSettings.localize_path(abs_path)
 	if not res_path.begins_with("res://"):
 		return "This file is outside the current Godot project:\n%s" % abs_path
+	if not FileAccess.file_exists(res_path):
+		return "The current working file is missing or deleted:\n%s" % res_path
+	if res_path.get_extension() in ["gd", "cs"]:
+		# Preserve native drafts; refresh clean tabs before reusing the cached script.
+		sync_open_scripts()
+		var native := EditorInterface.get_script_editor()
+		var dirty := native != null and res_path in native.get_unsaved_files()
+		var script := ResourceLoader.load(res_path, "Script", ResourceLoader.CACHE_MODE_REUSE if dirty else ResourceLoader.CACHE_MODE_REPLACE) as Script
+		if script == null:
+			return "Failed to load script:\n%s" % res_path
+		EditorInterface.edit_script(script)
+		EditorInterface.set_main_screen_editor("Script")
+		return ""
 
 	if res_path.get_extension() in ["tscn", "scn"]:
 		EditorInterface.open_scene_from_path(res_path)

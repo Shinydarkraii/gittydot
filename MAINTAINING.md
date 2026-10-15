@@ -1,6 +1,6 @@
 # Maintaining GittyDot
 
-GittyDot 0.1.0 is a fork of the Godit 1.1.1 package, for Godot 4.7.2 on Windows. The original MIT license and author attribution remain in LICENSE. UPSTREAM_README.md preserves the upstream instructions. upstream.json records the source package's checksums before customization.
+GittyDot 0.2.0 is a fork of the Godit 1.1.1 package, for Godot 4.7.2 on Windows. The original MIT license and author attribution remain in LICENSE. UPSTREAM_README.md preserves the upstream instructions. upstream.json records the source package's checksums before customization.
 
 ## Source boundaries
 
@@ -53,8 +53,20 @@ Read upstream changes against upstream.json and the original package. Port backe
 
 ## Remaining work
 
-This first release establishes the integrated workflow. Exact IntelliJ toolbar matching, multiple concurrent diff tabs, broader keyboard shortcuts, image/scene workflow polish remain future work. Godot's internal FileSystem controls need verification when upgrading the engine.
+Further work includes exact IntelliJ toolbar matching, multiple concurrent diff tabs, broader keyboard shortcuts, and image/scene workflow polish. Godot's internal FileSystem controls need verification when upgrading the engine.
 
 ## Repository layout
 
 Runtime resources are under `addons/gittydot/`; the unused upstream combined dock is omitted. Verification code lives in `tests/editor_checks.gd`, and `tools/test_gittydot.py` creates disposable test projects. Repository documentation, provenance and license files are kept once at the root. When distributing the addon alone, include the root LICENSE with it. The root .gdignore prevents duplicate imports when the repository is placed inside another Godot project.
+
+## 0.2.0 UI contracts
+
+The full-document editors retain outer ScrollContainers. Runtime NavigationLayer overlays reserve fixed gutter/overview strips, draw above overflowing text, accept clicks only in those strips, and leave caret/selection/Undo untouched. Clip drawing and clamp viewport indicators for unequal document lengths. Invalidate ranges on text changes and rebuild after debounce or saves. No authored scene hierarchy was changed for these overlays.
+
+`util/diff_palette.gd` is shared by read-only DiffRows and working comparisons. InlineHighlights only opts into it through `workspace_side`; its default native-script palette remains unchanged. Open in Editor checks disk presence for scripts and uses cached resources for dirty native drafts, while refreshing clean resources. Preserve guarded comparison saves before opening.
+
+OptionButton.fit_to_longest_item must remain off in Commit. Keep the layout origin at the left, clip Tree text columns with end ellipses, reserve the scaled checkbox column, and compact the shared sync bar before its minimum width can displace the dock.
+
+Use `--visual --ui-only` for the focused layout/navigation/color loop and `--editor-scale 1.5` for increased scale. Run the full graphical suite for save/recovery/native-editor and Git regressions. The portable test editor disables update polling and the runner fails on engine errors as well as script and startup diagnostics.
+
+Windows Git compatibility is determined on the main thread in `GitCli.prepare_environment()` before watchers/jobs start. Every repository command uses `argv()` to disable the legacy experimental monitor, and Git older than 2.37 additionally disables the modern monitor flag. Do not probe versions in worker threads or rewrite system/global config to enforce this policy. Fixture setup also disables inherited monitors so old-Git testing cannot spawn experimental daemons.

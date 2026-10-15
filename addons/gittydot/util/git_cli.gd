@@ -25,6 +25,8 @@ static var _command_log_revision := 0
 static var _log_mutex := Mutex.new()
 
 static var _saved_env: Dictionary = {}
+## Set on the main thread before watcher/jobs start. Unknown Git stays conservative.
+static var _old_windows_git := true
 ## Jobs whose thread hasn't been joined yet; shutdown() kills and joins them.
 static var _active_jobs: Array = []
 
@@ -97,6 +99,12 @@ static func _read_all(pipe: FileAccess) -> PackedByteArray:
 ## Full argv for `git <args>` in repo_root; quotePath off so non-ASCII paths come out as UTF-8, not "\304\215" escapes.
 static func argv(repo_root: String, args: Array) -> PackedStringArray:
 	var full_args := PackedStringArray(["-C", repo_root, "-c", "core.quotePath=false"])
+	if OS.get_name() == "Windows":
+		# Git for Windows' pre-upstream experimental daemon can be enabled by
+		# the installer system config, independently of this repository's settings.
+		full_args.append_array(["-c", "core.useBuiltinFSMonitor=false"])
+		if _old_windows_git:
+			full_args.append_array(["-c", "core.fsmonitor=false"])
 	# Per-invocation config: do not copy an executable shell command out of a
 	# repository's core.sshCommand into the entire editor environment.
 	# Explicit user GIT_SSH_COMMAND remains Git's higher-priority override.
@@ -165,11 +173,22 @@ static func paths(text: String) -> PackedStringArray:
 
 ## Called by plugin.gd on enable; restore_environment() undoes prompt/editor variables on disable. SSH is configured only in argv(), never in the editor environment.
 static func prepare_environment() -> void:
+	if OS.get_name() == "Windows":
+		var version := execute("git", PackedStringArray(["--version"]))
+		_old_windows_git = legacy_windows_monitor(version["out"].get_string_from_utf8())
 	_saved_env.clear()
 	var overrides := ENV_OVERRIDES.duplicate()
 	for key in overrides:
 		_saved_env[key] = OS.get_environment(key) if OS.has_environment(key) else null
 		OS.set_environment(key, overrides[key])
+
+
+static func legacy_windows_monitor(version: String) -> bool:
+	var parsed := RegEx.create_from_string("^git version (\\d+)\\.(\\d+)").search(version.strip_edges())
+	if parsed == null:
+		return true
+	var major := parsed.get_string(1).to_int()
+	return major < 2 or (major == 2 and parsed.get_string(2).to_int() < 37)
 
 
 static func restore_environment() -> void:

@@ -11,6 +11,7 @@ const Highlights := preload("res://addons/gittydot/dock/gutter/inline_highlights
 const SyntaxColors := preload("res://addons/gittydot/util/syntax_colors.gd")
 const Settings := preload("res://addons/gittydot/util/settings.gd")
 const UiScale := preload("res://addons/gittydot/util/ui_scale.gd")
+const Palette := preload("res://addons/gittydot/util/diff_palette.gd")
 const MAX_BYTES := 2 * 1024 * 1024
 const MAX_LINES := 20000
 const SAVE_DELAY := 0.35
@@ -38,6 +39,8 @@ var _saving := false
 var _regions: Array = []
 var _block_reason := ""
 var _announced := ""
+var _navigation_signature := ""
+var _navigation: Array[Control] = []
 
 
 func _init() -> void:
@@ -69,6 +72,12 @@ func _init() -> void:
 		pane.size_flags_horizontal = SIZE_EXPAND_FILL
 		pane.size_flags_vertical = SIZE_EXPAND_FILL
 		pane.custom_minimum_size.x = UiScale.px(120)
+		# Reserve viewport-sized strips outside the full-document CodeEdit.
+		# They stay visible even when the document scrolls horizontally.
+		var style := StyleBoxEmpty.new()
+		style.content_margin_left = UiScale.px(22)
+		style.content_margin_right = UiScale.px(20)
+		pane.add_theme_stylebox_override("panel", style)
 		_split.add_child(pane)
 		_panes.append(pane)
 		var code := CodeEdit.new()
@@ -97,10 +106,22 @@ func _init() -> void:
 
 func _ready() -> void:
 	_instances.append(self)
-	for code in _codes:
+	for side in 2:
+		var code := _codes[side]
 		var layer := Highlights.new()
+		layer.workspace_side = _highlights.size()
 		layer.attach(code, true)
 		_highlights.append(layer)
+		# Runtime-only UI: an overlay must draw after the overflowing CodeEdit.
+		# Top-level Controls are excluded from ScrollContainer content sizing.
+		var navigation := NavigationLayer.new()
+		navigation.view = self
+		navigation.side = side
+		navigation.set_as_top_level(true)
+		navigation.z_as_relative = false
+		navigation.clip_contents = true
+		_panes[side].add_child(navigation)
+		_navigation.append(navigation)
 
 
 static func flush_all() -> bool:
@@ -203,7 +224,8 @@ func show_file(context: Dictionary) -> void:
 	for code in _codes:
 		var highlighter := WorkingSyntax.new()
 		highlighter.language = language
-		highlighter.default_color = code.get_theme_color("font_color")
+		highlighter.default_color = Color(0.78, 0.78, 0.8)
+		highlighter.side = _codes.find(code)
 		code.syntax_highlighter = highlighter
 	_update_diff()
 	_update_status()
@@ -225,6 +247,10 @@ func _edited() -> void:
 	if _loading:
 		return
 	_update_status()
+	_regions.clear() # Never expose clickable stale ranges while recomputing.
+	_navigation_signature = ""
+	for pane in _panes:
+		pane.queue_redraw()
 	_timer.start()
 	_align.call_deferred()
 
@@ -354,6 +380,11 @@ func _update_diff() -> void:
 				layers[side][start + offset] = rows[offset]
 	for side in 2:
 		_highlights[side].set_rows(layers[side])
+		if _codes[side].syntax_highlighter is WorkingSyntax:
+			_codes[side].syntax_highlighter.changed_lines = layers[side]
+			_codes[side].syntax_highlighter.clear_highlighting_cache()
+		_panes[side].queue_redraw()
+	_navigation_signature = ""
 	_align.call_deferred()
 
 
@@ -367,7 +398,7 @@ func _align() -> void:
 	var overflow := 0.0
 	var widths := []
 	for side in 2:
-		var width := _panes[side].size.x - (_panes[side].get_v_scroll_bar().size.x if _panes[side].get_v_scroll_bar().visible else 0.0)
+		var width := _panes[side].size.x - UiScale.px(42) - (_panes[side].get_v_scroll_bar().size.x if _panes[side].get_v_scroll_bar().visible else 0.0)
 		widths.append(width)
 		overflow = maxf(overflow, _codes[side].get_minimum_size().x - width)
 	for side in 2:
@@ -388,6 +419,102 @@ func _sync_scroll(value: float, side: int, horizontal: bool) -> void:
 		var mapped := map_line(line, side)
 		_panes[1 - side].get_v_scroll_bar().value = mapped * height
 	_syncing = false
+	for pane in _panes:
+		pane.queue_redraw()
+
+
+func _process(_delta: float) -> void:
+	if not is_visible_in_tree():
+		return
+	var signature := str([_panes[0].size, _panes[1].size, _panes[0].global_position, _panes[1].global_position, _panes[0].scroll_vertical, _panes[1].scroll_vertical])
+	if signature != _navigation_signature:
+		_navigation_signature = signature
+		for side in _navigation.size():
+			var depth := 1
+			var ancestor: Node = _panes[side]
+			while ancestor != null:
+				if ancestor is CanvasItem:
+					depth += ancestor.z_index
+					if not ancestor.z_as_relative:
+						break
+				ancestor = ancestor.get_parent()
+			_navigation[side].z_index = mini(4095, depth)
+			_navigation[side].global_position = _panes[side].global_position
+			_navigation[side].size = _panes[side].size
+			_navigation[side].queue_redraw()
+
+
+func _overview_rect(side: int) -> Rect2:
+	return Rect2(_panes[side].size.x - UiScale.px(18), 0, UiScale.px(16), maxf(1, _panes[side].size.y - UiScale.px(16)))
+
+
+func _range(region: Dictionary, side: int) -> Vector2i:
+	var count: int = region["old_count" if side == 0 else "new_count"]
+	var start: int = region["old_start" if side == 0 else "new_start"]
+	return Vector2i(maxi(0, start - 1 if count > 0 else start), count)
+
+
+func _draw_navigation(side: int, canvas: Control) -> void:
+	var pane := _panes[side]
+	var code := _codes[side]
+	var overview := _overview_rect(side)
+	var line_height := float(code.get_line_height())
+	var total := float(maxi(1, code.get_line_count()))
+	canvas.draw_rect(Rect2(0, 0, UiScale.px(22), pane.size.y), Color(0.1, 0.1, 0.1))
+	canvas.draw_rect(Rect2(pane.size.x - UiScale.px(20), 0, UiScale.px(20), pane.size.y), Color(0.1, 0.1, 0.1))
+	canvas.draw_rect(overview, Color(1, 1, 1, 0.04))
+	var font := code.get_theme_font("font")
+	var font_size := code.get_theme_font_size("font_size")
+	var top := code.get_theme_stylebox("normal" if code.editable else "read_only").get_margin(SIDE_TOP)
+	for region: Dictionary in _regions:
+		var span := _range(region, side)
+		var removed: bool = side == 0 or span.y == 0
+		var color := Palette.REMOVED_TEXT if removed else Palette.ADDED_TEXT
+		var marker_y := minf(overview.end.y - UiScale.px(3), overview.position.y + span.x / total * overview.size.y)
+		canvas.draw_rect(Rect2(overview.position.x + 2, marker_y, overview.size.x - 4, maxf(UiScale.px(3), span.y / total * overview.size.y)), color)
+		var y := top + span.x * line_height - pane.scroll_vertical
+		var end := y + maxi(1, span.y) * line_height
+		var clipped := Rect2(UiScale.px(2), maxf(0, y), UiScale.px(3), maxf(0, minf(overview.end.y, end) - maxf(0, y)))
+		if clipped.has_area():
+			canvas.draw_rect(clipped, color)
+		if span.y == 0:
+			if y >= 0 and y < overview.end.y:
+				canvas.draw_line(Vector2(2, y + 1), Vector2(UiScale.px(20), y + 1), color, UiScale.px(2))
+		else:
+			for line in range(maxi(span.x, int(pane.scroll_vertical / line_height)), mini(span.x + span.y, int((pane.scroll_vertical + overview.end.y) / line_height) + 1)):
+				var baseline := top + (line + 1) * line_height - pane.scroll_vertical - font.get_descent(font_size)
+				if baseline >= font.get_ascent(font_size) and baseline <= overview.end.y:
+					canvas.draw_string(font, Vector2(UiScale.px(7), baseline), "−" if removed else "+", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
+	var first := clampf(pane.scroll_vertical / line_height / total * overview.size.y, 0, maxf(0, overview.size.y - UiScale.px(3)))
+	var height := minf(overview.size.y - first, pane.size.y / line_height / total * overview.size.y)
+	canvas.draw_rect(Rect2(overview.position.x, first, overview.size.x, maxf(UiScale.px(3), height)), Color(0.7, 0.78, 1, 0.65), false, 1)
+
+
+func _navigation_input(event: InputEvent, side: int) -> void:
+	if event is not InputEventMouseButton or event.button_index != MOUSE_BUTTON_LEFT or not event.pressed:
+		return
+	var overview := _overview_rect(side)
+	var pane := _panes[side]
+	var line := -1.0
+	if overview.has_point(event.position):
+		line = (event.position.y - overview.position.y) / overview.size.y * _codes[side].get_line_count()
+	elif event.position.x < UiScale.px(22):
+		line = (event.position.y + pane.scroll_vertical) / _codes[side].get_line_height()
+	else:
+		return
+	var nearest := -1
+	var distance := INF
+	for region: Dictionary in _regions:
+		var span := _range(region, side)
+		var delta := absf(line - clampf(line, span.x, span.x + span.y))
+		if delta < distance:
+			distance = delta
+			nearest = span.x
+	if nearest >= 0:
+		# Navigation changes scroll only, preserving selection, caret and Undo.
+		pane.scroll_vertical = maxi(0, int(nearest * _codes[side].get_line_height() - pane.size.y * 0.3))
+		if side < _navigation.size():
+			_navigation[side].accept_event()
 
 
 ## Nearest corresponding source line, without inserting editable phantom rows.
@@ -480,13 +607,35 @@ func _exit_tree() -> void:
 	_highlights.clear()
 
 
+class NavigationLayer:
+	extends Control
+	var view: Control
+	var side := 0
+	func _has_point(point: Vector2) -> bool:
+		return Rect2(Vector2.ZERO, size).has_point(point) and (point.x < UiScale.px(22) or point.x >= size.x - UiScale.px(20))
+	func _draw() -> void:
+		if is_instance_valid(view) and view.is_visible_in_tree():
+			view._draw_navigation(side, self)
+	func _gui_input(event: InputEvent) -> void:
+		view._navigation_input(event, side)
+	func _get_tooltip(_point: Vector2) -> String:
+		return "Click a change sign or overview marker to reveal that change. The outline shows the current viewport."
+
+
 class WorkingSyntax:
 	extends SyntaxHighlighter
 	var language := ""
 	var default_color := Color.WHITE
+	var side := 0
+	var changed_lines := {}
 	func _get_line_syntax_highlighting(line: int) -> Dictionary:
-		var result := {}
+		var base := default_color
+		if changed_lines.has(line):
+			base = Palette.REMOVED_TEXT if side == 0 else Palette.ADDED_TEXT
+			if not language.is_empty():
+				base = base.lerp(Color(0.9, 0.9, 0.92), 0.55)
+		var result := {0: {"color": base}}
 		for span in SyntaxColors.spans(get_text_edit().get_line(line), language):
 			result[span[0]] = {"color": span[2]}
-			result[span[0] + span[1]] = {"color": default_color}
+			result[span[0] + span[1]] = {"color": base}
 		return result

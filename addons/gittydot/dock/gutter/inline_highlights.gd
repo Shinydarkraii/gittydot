@@ -4,10 +4,12 @@
 extends RefCounted
 
 const GitIcons := preload("res://addons/gittydot/util/git_icons.gd")
+const Palette := preload("res://addons/gittydot/util/diff_palette.gd")
 const META := "gittydot_inline_highlights"
 
 var code: CodeEdit
 var rows := {}
+var workspace_side := -1
 var geometry := {}
 var _view_signature := ""
 var _owns_gutter := false
@@ -186,11 +188,11 @@ func draw_line(line: int, cell: Rect2) -> void:
 	var base := GitIcons.COLOR_MODIFIED if kind in ["modified", "modified_old"] else (GitIcons.COLOR_ADDED if kind == "added" else GitIcons.COLOR_DELETED)
 	var background := Rect2(bounds.position.x, cell.position.y, bounds.size.x, cell.size.y * (code.get_line_wrap_count(line) + 1)).intersection(bounds)
 	if background.has_area():
-		code.draw_rect(background, Color(base, 0.065))
+		code.draw_rect(background, (Palette.REMOVED_BG if workspace_side == 0 else Palette.ADDED_BG) if workspace_side >= 0 else Color(base, 0.065))
 	if _view_signature != _signature():
 		return # Never paint stale positions during a scroll, resize or font change.
 	for block: Dictionary in geometry.get(line, []):
-		code.draw_rect(block["rect"], span_color(block["kind"]))
+		code.draw_rect(block["rect"], (Palette.REMOVED_HL if workspace_side == 0 else Palette.ADDED_HL) if workspace_side >= 0 else span_color(block["kind"]))
 
 
 static func span_color(kind: String) -> Color:

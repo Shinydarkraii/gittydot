@@ -109,8 +109,9 @@ func refresh() -> void:
 	_path_label.text = path
 	_path_label.tooltip_text = path
 	var native_path := _native_path()
-	var local := ProjectSettings.localize_path(repo.get_repo_root().path_join(native_path))
-	_open_button.disabled = native_path.is_empty() or not FileAccess.file_exists(local) or not local.begins_with("res://") or not (local.get_extension() in ["tscn", "scn"] or ResourceLoader.exists(local))
+	var unavailable := EditorOpen.unavailable_reason(repo.get_repo_root(), native_path)
+	_open_button.disabled = not unavailable.is_empty()
+	_open_button.tooltip_text = unavailable if not unavailable.is_empty() else "Save comparison edits and open the current working file in Godot"
 	var options: Dictionary = diff_view.get_options()
 	if not _comparison.is_empty():
 		var context := _comparison.duplicate(true)

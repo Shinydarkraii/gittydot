@@ -42,6 +42,8 @@ func check(label: String, ok: bool) -> void:
 
 func _run() -> void:
 	await get_tree().create_timer(1.0).timeout
+	while EditorInterface.get_resource_filesystem().is_scanning():
+		await get_tree().process_frame
 	for node: Node in get_tree().root.find_children("*", "EditorPlugin", true, false):
 		if node.get_script() != null and node.get_script().resource_path == "res://addons/gittydot/plugin.gd":
 			_fork = node
@@ -51,9 +53,16 @@ func _run() -> void:
 		_finish()
 		return
 	var repo: RefCounted = _fork.dock_instance._repo
+	_check_monitor_safety(repo)
+	if OS.get_cmdline_user_args().has("--gittydot-ui-only"):
+		await _check_narrow_commit(repo)
+		await _check_editable_diff(repo)
+		_finish()
+		return
 	_check_startup_helpers()
 	await _check_console_safety(repo)
 	await _check_folder_actions(repo)
+	await _check_narrow_commit(repo)
 	var restore_patch: String = repo.get_diff("tracked.gd", true)
 	check("existing partial staging preserved on startup", repo.get_file_bytes(":", "tracked.gd").get_string_from_utf8().contains("number := 2"))
 	check("auto-stage and auto-add default off", not Settings.get_value("auto_stage_changes", false) and not Settings.get_value("auto_add_new_files", false))
@@ -313,8 +322,37 @@ func _check_selected_amend(repo: RefCounted) -> void:
 				check("Continue completes selected amendment and clears recovery metadata", result["ok"] and isolated.get_operation_state()["kind"].is_empty() and not FileAccess.file_exists(isolated._amend_recovery_path()) and Cli.run(path, ["rev-list", "--count", "HEAD"])["text"].strip_edges() == "3")
 
 
+func _check_narrow_commit(repo: RefCounted) -> void:
+	var shell := PanelContainer.new()
+	shell.position = Vector2(8, 8)
+	shell.z_index = 100
+	var background := StyleBoxFlat.new()
+	background.bg_color = Color(0.14, 0.14, 0.16)
+	shell.add_theme_stylebox_override("panel", background)
+	EditorInterface.get_base_control().add_child(shell)
+	var panel := ChangesScene.instantiate()
+	shell.add_child(panel)
+	panel.set_repo(repo)
+	panel._changelist_option.set_item_text(0, "Changelist: a very long name that must truncate at the end")
+	panel._sync_bar._branch_button.text = "⎇ feature/a-very-long-branch-name"
+	panel._sync_bar._branch_button.set_meta("full_text", panel._sync_bar._branch_button.text)
+	for width in [320, 260, 220, 200]:
+		shell.size = Vector2(width * EditorInterface.get_editor_scale(), 720)
+		for frame in 5:
+			await get_tree().process_frame
+		var tree: Tree = panel._tree
+		check("Commit dock fits %d logical pixels without losing its left edge or checkbox column" % width, tree.global_position.x >= shell.global_position.x and tree.get_global_rect().end.x <= shell.get_global_rect().end.x + 1 and panel.get_node("Layout").global_position.x >= shell.global_position.x and panel.get_node("Layout").size.x <= shell.size.x + 1)
+		if OS.get_cmdline_user_args().has("--gittydot-visual"):
+			RenderingServer.force_draw(false)
+			var image := shell.get_viewport().get_texture().get_image().get_region(Rect2i(Vector2i(shell.global_position), Vector2i(shell.size)))
+			image.save_png("res://commit-%d.png" % width)
+	shell.queue_free()
+	await get_tree().process_frame
+
+
 func _check_editable_diff(repo: RefCounted) -> void:
 	var screen: Control = _fork.main_screen
+	EditorInterface.set_main_screen_editor("GittyDot")
 	Settings.set_value("diff_side_by_side", true)
 	screen._mode.select(0)
 	screen.open_path("editable.txt")
@@ -329,6 +367,10 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	# The native headless main screen can be narrower than both minimum panes.
 	var shell := PanelContainer.new()
 	shell.position = Vector2(16, 12)
+	shell.z_index = 100
+	var background := StyleBoxFlat.new()
+	background.bg_color = Color(0.14, 0.14, 0.16)
+	shell.add_theme_stylebox_override("panel", background)
 	shell.size = Vector2(1000, 380)
 	EditorInterface.get_base_control().add_child(shell)
 	var scrolling := WorkingDiff.new()
@@ -349,6 +391,41 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	var left_end: float = scrolling._panes[0].get_h_scroll_bar().max_value - scrolling._panes[0].get_h_scroll_bar().page
 	var right_end: float = scrolling._panes[1].get_h_scroll_bar().max_value - scrolling._panes[1].get_h_scroll_bar().page
 	check("editable panes retain a common horizontal end range after resize", absf(left_end - right_end) <= 1.0)
+	var source_before: String = scrolling._codes[1].text
+	var caret_before: int = scrolling._codes[1].get_caret_line()
+	# Put a deletion at EOF and a replacement near the end of the baseline.
+	scrolling._codes[0].text = scrolling._codes[0].text.replace("line 90: original", "line 90: previous") + "deleted final line\n"
+	scrolling._update_diff()
+	check("working diff uses committed addition and deletion palette without changing native script colors", scrolling._highlights[0].workspace_side == 0 and scrolling._highlights[1].workspace_side == 1 and DiffView.DiffRows.COLOR_ADDED_BG == preload("res://addons/gittydot/util/diff_palette.gd").ADDED_BG)
+	check("overview includes start middle end and deletion-only changes", scrolling._regions.size() >= 4 and scrolling._regions.any(func(region: Dictionary) -> bool: return region["new_count"] == 0))
+	var overview: Rect2 = scrolling._overview_rect(1)
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	click.position = Vector2(overview.get_center().x, overview.end.y - 2)
+	scrolling._navigation[1]._gui_input(click)
+	check("clicking overview reveals end changes without moving caret or editing source", scrolling._panes[1].scroll_vertical > scrolling._codes[1].get_line_height() * 70 and scrolling._codes[1].text == source_before and scrolling._codes[1].get_caret_line() == caret_before)
+	click.position.y = 1
+	scrolling._navigation_input(click, 1)
+	check("clicking overview returns to beginning changes", scrolling._panes[1].scroll_vertical == 0)
+	scrolling._panes[1].scroll_horizontal = 150
+	check("overview stays anchored to the visible pane during horizontal overflow", scrolling._overview_rect(1) == overview)
+	check("navigation overlays accept strip clicks while leaving source editing unobstructed", scrolling._navigation[1]._has_point(overview.get_center()) and not scrolling._navigation[1]._has_point(scrolling._navigation[1].size * 0.5))
+	var automatic: bool = Settings.get_value("auto_save_scripts", true)
+	Settings.set_value("auto_save_scripts", false)
+	var draft: CodeEdit = scrolling._codes[1]
+	draft.set_caret_line(60)
+	draft.insert_text_at_caret("an inserted navigation test line\n")
+	await get_tree().process_frame
+	check("editing immediately invalidates stale overview ranges", scrolling._regions.is_empty())
+	await get_tree().create_timer(0.45).timeout
+	check("overview recomputes after successive edits without saving when auto-save is off", not scrolling._regions.is_empty() and scrolling.is_dirty() and FileAccess.get_file_as_string("res://editable.txt") == source_before)
+	draft.undo()
+	await get_tree().process_frame
+	scrolling._timer.stop()
+	scrolling._update_diff()
+	check("Undo restores source and rebuilds navigation without a write", draft.text == source_before and not scrolling.is_dirty() and not scrolling._regions.is_empty())
+	Settings.set_value("auto_save_scripts", automatic)
 	if OS.get_cmdline_user_args().has("--gittydot-visual"):
 		scrolling._panes[1].scroll_horizontal = 0
 		scrolling._panes[1].scroll_vertical = scrolling._codes[1].get_line_height() * 37
@@ -357,9 +434,51 @@ func _check_editable_diff(repo: RefCounted) -> void:
 		RenderingServer.force_draw(false)
 		var capture := shell.get_viewport().get_texture().get_image().get_region(Rect2i(Vector2i(shell.global_position), Vector2i(shell.size)))
 		check("graphical editor captures the editable working-file panes", capture != null and not capture.is_empty() and capture.save_png("res://editable-working-diff.png") == OK)
+		var viewport_image := shell.get_viewport().get_texture().get_image()
+		var colored := true
+		for side in 2:
+			var rect: Rect2 = scrolling._overview_rect(side)
+			var total: int = scrolling._codes[side].get_line_count()
+			var region: Dictionary = scrolling._regions[1]
+			var span: Vector2i = scrolling._range(region, side)
+			var point: Vector2i = Vector2i(scrolling._panes[side].global_position + Vector2(rect.position.x + 5, floorf(float(span.x) / total * rect.size.y) + 1))
+			var expected := preload("res://addons/gittydot/util/diff_palette.gd").REMOVED_TEXT if side == 0 or span.y == 0 else preload("res://addons/gittydot/util/diff_palette.gd").ADDED_TEXT
+			var pixel := viewport_image.get_pixelv(point)
+			colored = colored and absf(pixel.r - expected.r) < 0.02 and absf(pixel.g - expected.g) < 0.02 and absf(pixel.b - expected.b) < 0.02
+		check("overview renders shared diff colors in both visible viewport strips", colored)
+		scrolling._panes[1].scroll_vertical = 0
+		for frame in 4:
+			await get_tree().process_frame
+		RenderingServer.force_draw(false)
+		viewport_image = shell.get_viewport().get_texture().get_image()
+		var blocks_match := true
+		var spans_match := true
+		for side in 2:
+			var code: CodeEdit = scrolling._codes[side]
+			var palette := preload("res://addons/gittydot/util/diff_palette.gd")
+			var base: Color = code.get_theme_stylebox("normal" if code.editable else "read_only").bg_color
+			var expected_bg: Color = base.blend(palette.REMOVED_BG if side == 0 else palette.ADDED_BG)
+			var y: float = code.global_position.y + code.get_rect_at_line_column(2, 0).position.y
+			var point := Vector2i(scrolling._panes[side].global_position.x + scrolling._panes[side].size.x - 70, y + 2)
+			var pixel := viewport_image.get_pixelv(point)
+			blocks_match = blocks_match and _near_color(pixel, expected_bg)
+			var expected_hl: Color = expected_bg.blend(palette.REMOVED_HL if side == 0 else palette.ADDED_HL)
+			var found_span := false
+			for block: Dictionary in scrolling._highlights[side].geometry.get(2, []):
+				var rect: Rect2 = block["rect"]
+				for x in range(int(rect.position.x), int(rect.end.x)):
+					var sample := Vector2i(code.global_position + Vector2(x, rect.position.y + 1))
+					if _near_color(viewport_image.get_pixelv(sample), expected_hl):
+						found_span = true
+			spans_match = spans_match and found_span
+		check("editable replacement backgrounds render the shared committed-diff palette", blocks_match)
+		check("editable replacement spans render the shared committed-diff palette", spans_match)
+		viewport_image.get_region(Rect2i(Vector2i(shell.global_position), Vector2i(shell.size))).save_png("res://editable-working-replacement.png")
 	shell.queue_free()
 	await get_tree().process_frame
 	var original := right.text
+	if OS.get_cmdline_user_args().has("--gittydot-ui-only"):
+		return # Layout/navigation loop; saving, native scenes and scripts use the full suite.
 	var staged: PackedByteArray = repo.get_file_bytes(":", "editable.txt")
 	right.set_caret_line(2)
 	right.set_caret_column(right.get_line(2).length())
@@ -438,8 +557,16 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	await get_tree().process_frame
 	view.flush()
 	check("successful recovery save removes the stored draft", not FileAccess.file_exists(recovery))
-	EditorInterface.open_scene_from_path("res://editable_scene.tscn")
+	# Prepare the native scene fixture outside the custom main screen's draw pass.
+	EditorInterface.set_main_screen_editor("2D")
 	await get_tree().process_frame
+	while EditorInterface.get_resource_filesystem().is_scanning():
+		await get_tree().process_frame
+	# Native scene loading runs an editor progress loop. Enter it from idle,
+	# not inside process_frame/import notifications dispatched by that same loop.
+	EditorInterface.open_scene_from_path.call_deferred("res://editable_scene.tscn")
+	for frame in 4:
+		await get_tree().process_frame
 	screen.open_path("editable_scene.tscn")
 	right.set_caret_line(right.get_line_count() - 1)
 	right.insert_text_at_caret("metadata/test_value = 2\n")
@@ -465,6 +592,11 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	native.insert_text_at_caret("# native draft\n")
 	right.insert_text_at_caret("# comparison draft\n")
 	check("simultaneous native and comparison drafts block saving without overwriting either", not view.flush() and native.text.contains("native draft") and right.text.contains("comparison draft") and FileAccess.get_file_as_string("res://tracked.gd") == disk_before)
+	screen._open_native()
+	check("Open in Editor preserves competing native and comparison drafts", native.text.contains("native draft") and right.text.contains("comparison draft") and FileAccess.get_file_as_string("res://tracked.gd") == disk_before)
+	for dialog: AcceptDialog in screen.diff_view.find_children("*", "AcceptDialog", true, false):
+		if dialog.title == "Comparison save paused":
+			dialog.confirmed.emit()
 	check("Git operations are blocked while a comparison draft cannot be saved", not SaveGuard.flush_scripts() and SaveGuard.unsaved_files().has("res://tracked.gd"))
 	native.undo()
 	right.undo()
@@ -488,8 +620,31 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	check("manual Save remains available with auto-save disabled", not view.is_dirty() and FileAccess.get_file_as_string("res://tracked.gd").contains("manual comparison save"))
 	right.undo()
 	view.flush()
+	# Explicit opening must flush edits even while automatic saving is disabled.
+	for script_path in ["tracked.gd", "new_file.gd", "created_after_import.gd"]:
+		if script_path == "created_after_import.gd":
+			var fresh := FileAccess.open("res://" + script_path, FileAccess.WRITE)
+			fresh.store_string("extends Node\nvar just_created := true\n")
+			fresh.close()
+		screen.open_path(script_path)
+		check("Open in Editor enables a project script: " + script_path, not screen._open_button.disabled)
+		right.set_caret_line(0)
+		right.set_caret_column(0)
+		right.insert_text_at_caret("# pending open\n")
+		screen._open_native()
+		await get_tree().process_frame
+		var opened: CodeEdit = EditorInterface.get_script_editor().get_current_editor().get_base_editor()
+		check("Open in Editor flushes manual comparison edits and opens updated source: " + script_path, not view.is_dirty() and opened.text == right.text and opened.text.contains("pending open") and Open.current_tab_path() == "res://" + script_path)
+		right.undo()
+		view.flush()
+	check("missing files explain why Open in Editor is unavailable", not Open.unavailable_reason(repo.get_repo_root(), "deleted.txt").is_empty())
+	check("out-of-project files cannot be opened", not Open.unavailable_reason(repo.get_repo_root(), "../outside.gd").is_empty())
 	Settings.set_value("auto_save_scripts", true)
 	WorkingDiff.apply_auto_save_policy()
+
+
+func _near_color(actual: Color, expected: Color) -> bool:
+	return absf(actual.r - expected.r) < 0.02 and absf(actual.g - expected.g) < 0.02 and absf(actual.b - expected.b) < 0.02
 
 
 func _check_history_diff(repo: RefCounted) -> void:
@@ -821,6 +976,21 @@ func _check_startup_helpers() -> void:
 	var candidates := RepoSetup.gh_candidates(OS.get_name(), search_path)
 	check("CLI discovery keeps paths with spaces and deduplicates PATH entries", candidates.size() == 1 and candidates[0] == scratch.path_join("gh.exe" if OS.get_name() == "Windows" else "gh"))
 	check("Windows CLI discovery never adds macOS fallback locations", RepoSetup.gh_candidates("Windows", "").is_empty())
+
+
+func _check_monitor_safety(repo: RefCounted) -> void:
+	var versions := {"git version 2.36.1.windows.1": true, "git version 2.37.0.windows.1": false, "git version 2.53.0.windows.3": false, "unknown": true}
+	for version in versions:
+		check("legacy Windows monitor guard: " + version, Cli.legacy_windows_monitor(version) == versions[version])
+	if OS.get_name() != "Windows":
+		return
+	var root: String = repo.get_repo_root()
+	Cli.run(root, ["config", "--local", "core.useBuiltinFSMonitor", "true"])
+	check("Git children disable the inherited experimental Windows monitor", Cli.run(root, ["config", "--bool", "--get", "core.useBuiltinFSMonitor"])["text"].strip_edges() == "false")
+	check("monitor safeguard does not rewrite repository configuration", Cli.execute("git", PackedStringArray(["-C", root, "config", "--local", "--get", "core.useBuiltinFSMonitor"]))["out"].get_string_from_utf8().strip_edges() == "true")
+	Cli.run(root, ["config", "--local", "core.useBuiltinFSMonitor", "false"])
+	var args := Cli.argv(root, ["status", "--porcelain"])
+	check("old Git disables modern monitor flag while supported Git retains opt-in behavior", args.has("core.fsmonitor=false") == Cli._old_windows_git)
 
 
 func _check_console_safety(repo: RefCounted) -> void:
