@@ -1,6 +1,6 @@
 # GittyDot usage guide
 
-Detailed workflow instructions for **GittyDot 0.2.0**. Start with the [README](README.md) for installation, requirements, features, and known limitations.
+Detailed workflow instructions for **GittyDot 0.2.5 — Compatability Update**. Start with the [README](README.md) for installation, requirements, features, and known limitations.
 
 ## Workflow
 
@@ -70,3 +70,7 @@ The temporary-folder name comes from the development convention used for this fo
 ### Older Git for Windows and filesystem monitors
 
 GittyDot passes `core.useBuiltinFSMonitor=false` to Windows Git children so the old experimental daemon cannot be enabled by system Git settings. For Git older than 2.37 (or an unrecognized version), it also passes `core.fsmonitor=false`. Supported newer Git keeps its existing modern monitor opt-in behavior. These overrides apply to GittyDot commands and do not rewrite global Git settings. They reduce exposure to the old monitor; a native git.exe crash still needs its Windows fault report for a definitive diagnosis.
+
+### Updating Godot
+
+This release requires Godot 4.4+. The Windows editor checks cover Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1. Godot 4.0–4.3 are unsupported. Replace the full addon and restart Godot after updating it; open comparisons retain their highlighting, overview navigation and save registration when Godot reparents editor UI. Other prerelease builds remain unverified.

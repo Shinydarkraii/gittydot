@@ -13,7 +13,7 @@ import subprocess
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--godot', type=Path, required=True, help='Godot 4.7.2 executable')
+    parser.add_argument('--godot', type=Path, required=True, help='Godot editor executable')
     parser.add_argument('--visual', action='store_true', help='Use a hidden graphical editor and capture the native highlight preview')
     parser.add_argument('--ui-only', action='store_true', help='Run the focused dock and editable comparison regressions')
     parser.add_argument('--editor-scale', type=float, default=1.0, choices=[1.0, 1.5, 2.0], help='Portable test editor display scale')
@@ -146,7 +146,11 @@ renderer/rendering_method="gl_compatibility"
             hook.chmod(0o755)
 
     # A portable copy keeps editor settings inside the project during headless checks.
-    engine_dir = work / ('engine' if args.editor_scale == 1.0 else f'engine-scale-{args.editor_scale}')
+    version = subprocess.run([str(args.godot), '--version'], check=True, capture_output=True, text=True).stdout.strip()
+    match = re.match(r'(\d+\.\d+)\.', version)
+    if not match:
+        parser.error('Could not determine Godot version: ' + version)
+    engine_dir = work / ('engine-' + re.sub(r'[^A-Za-z0-9._-]', '_', version) + f'-scale-{args.editor_scale}')
     engine_dir.mkdir(exist_ok=True)
     engine = engine_dir / 'godot.exe'
     if args.godot.resolve() != engine.resolve():
@@ -155,7 +159,7 @@ renderer/rendering_method="gl_compatibility"
     (engine_dir / '._sc_').write_text('', encoding='utf-8')
     editor_data = engine_dir / 'editor_data'
     editor_data.mkdir(exist_ok=True)
-    settings = editor_data / 'editor_settings-4.7.tres'
+    settings = editor_data / f'editor_settings-{match.group(1)}.tres'
     config = settings.read_text(encoding='utf-8') if settings.exists() else '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n'
     overrides = {'interface/editor/appearance/display_scale': '7', 'interface/editor/appearance/custom_display_scale': str(args.editor_scale), 'network/connection/check_for_updates': '0'}
     if ca_bundle.is_file():

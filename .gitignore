@@ -22,3 +22,7 @@ Thumbs.db
 
 # Machine-specific installed-copy mapping for contributor tools
 /LOCAL_SYNC.md
+
+# Local compatibility planning checklist
+/LOCAL_CHECKLIST.md
+/LOCAL_COMPATIBILITY_RESULTS.json

@@ -154,10 +154,11 @@ func _connect_history_diff() -> void:
 		return
 	var history: Control = history_dock_instance._history_panel
 	# Also bind after source reloads, without rebuilding editor docks or buffers.
-	if history.has_signal("diff_requested") and not history.is_connected("diff_requested", _show_history_diff):
-		history.connect("diff_requested", _show_history_diff)
-	if history.has_signal("amend_requested") and not history.is_connected("amend_requested", _prepare_amend):
-		history.connect("amend_requested", _prepare_amend)
+	if is_instance_valid(history):
+		if history.has_signal("diff_requested") and not history.is_connected("diff_requested", _show_history_diff):
+			history.connect("diff_requested", _show_history_diff)
+		if history.has_signal("amend_requested") and not history.is_connected("amend_requested", _prepare_amend):
+			history.connect("amend_requested", _prepare_amend)
 	if not dock_instance._changes_panel.is_connected("amend_log_requested", _show_amend_log):
 		dock_instance._changes_panel.connect("amend_log_requested", _show_amend_log)
 

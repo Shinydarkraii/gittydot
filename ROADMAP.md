@@ -1,8 +1,14 @@
-# GittyDot 0.2.0
+# GittyDot release roadmap
+
+## 0.2.5 — Compatability Update
+
+Verified on Windows with Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1. Requires Godot 4.4+; 4.0–4.3 were assessed and remain unsupported. The earlier 0.2.0 and 0.2.1 packages are preserved separately.
+
+## 0.2.0 — completed UI release
 
 Status: implemented and verified locally on 2026-10-15 for release 0.2.0. All five items below are included. The acceptance criteria are retained for future regression checks. Verification includes 265 graphical integration checks, focused graphical checks at 100% and 150% editor scale, 320/260/220/200 logical-pixel Commit captures, overview navigation after editing/Undo, shared palette pixel checks, and updated existing/new/untracked script opening. Tested configuration remains Windows / Godot 4.7.2 / Git 2.53.0; other platforms and versions remain unverified.
 
-## 1. Narrow Commit dock
+### 1. Narrow Commit dock
 
 - Keep the entire dock anchored to its left edge when resized. Changelist names, folder labels, filename prefixes, commit-message labels and action rows must not slide off the left side.
 - Keep staging checkboxes visible and usable at the right edge, including checked, unchecked and partially checked folder/group states.
@@ -14,7 +20,7 @@ Acceptance: resize the dock through approximately 320, 260, 220 and 200 logical 
 
 Primary implementation areas: `changes_panel.gd`, `changes_panel.tscn`, `sync_bar.gd`, and the outer dock containers.
 
-## 2. Change signs in editable comparisons
+### 2. Change signs in editable comparisons
 
 - Add dedicated non-editable change gutters using the same +/− semantics as committed diffs: additions show +, deletions show −, and replacements show − on the previous version and + on the working version.
 - Represent modified ranges and deletions that have no surviving right-hand line clearly. Keep adjacent changes grouped rather than drawing disconnected markers for each line.
@@ -24,7 +30,7 @@ Acceptance: compare an addition, deletion, replacement, a multi-line hunk and an
 
 Primary implementation area: `working_diff.gd`, with `diff_view.gd`/`DiffRows` as the read-only reference.
 
-## 3. Finding edits
+### 3. Finding edits
 
 - Provide a visible change gutter and a minimap/overview with changed ranges, anchored to the visible editor pane.
 - Clicking an overview marker or change gutter should reveal the corresponding edit without modifying the file. Include an indication of the current viewport.
@@ -35,7 +41,7 @@ Acceptance: edits near the beginning, middle and end of a long file are discover
 
 Primary implementation area: `working_diff.gd` and its scroll/highlight integration.
 
-## 4. Consistent diff colors
+### 4. Consistent diff colors
 
 - Match editable working-file comparisons to the committed-diff editor's addition/deletion backgrounds and stronger intraline highlights.
 - Reuse shared diff palette definitions instead of applying the script-gutter modification palette to the diff workspace.
@@ -45,7 +51,7 @@ Acceptance: open equivalent content changes in working-file and committed compar
 
 Primary implementation areas: `working_diff.gd`, `diff_view.gd` palette constants, and configurable highlight rendering.
 
-## 5. Open in Editor
+### 5. Open in Editor
 
 - Enable Open in Editor for an existing project-local script and open its updated working-file contents in Godot's Script editor.
 - Flush comparison edits first. Preserve competing unsaved native drafts and report save/open failures with the existing Console-details action.
@@ -56,7 +62,7 @@ Acceptance: modified, partially staged, newly created and untracked .gd files op
 
 Primary implementation areas: `gittydot_screen.gd` and `editor_open.gd`.
 
-## Release checks
+### Release checks
 
 - Implement and verify both the installed addon and the standalone repository, preserving their packaging differences.
 - Preserve working-file auto/manual saving, recovery, native Undo, partial staging, historical/index read-only behavior and the existing Git backend.

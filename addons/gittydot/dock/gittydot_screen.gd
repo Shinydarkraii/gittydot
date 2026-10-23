@@ -166,7 +166,7 @@ func _open_native() -> void:
 	var local := ProjectSettings.localize_path(repo.get_repo_root().path_join(native_path))
 	# A clean open scene may still have its old tree cached after raw-text edits.
 	# Reload only on the explicit Open in Editor action; never discard a native draft.
-	if _comparison.is_empty() and local.get_extension() in ["tscn", "scn"] and local in EditorInterface.get_open_scenes() and local not in EditorInterface.get_unsaved_scenes():
+	if _comparison.is_empty() and local.get_extension() in ["tscn", "scn"] and local in EditorInterface.get_open_scenes() and local not in EditorOpen.unsaved_scenes():
 		EditorOpen.refresh_external_change(repo.get_repo_root(), native_path)
 	var error := EditorOpen.open_file(repo.get_repo_root(), _native_path())
 	if not error.is_empty():

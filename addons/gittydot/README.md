@@ -7,8 +7,8 @@
 <p align="center"><strong>Review changes, edit diffs, and commit without leaving Godot.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0-589eff" alt="Version 0.2.0">
-  <img src="https://img.shields.io/badge/Godot-tested%20on%204.7.2-478cbf" alt="Tested on Godot 4.7.2">
+  <img src="https://img.shields.io/badge/version-0.2.5-589eff" alt="Version 0.2.5">
+  <img src="https://img.shields.io/badge/Godot-4.4%2B%20%7C%204.8%20beta1-478cbf" alt="Godot 4.4+; tested through 4.8 beta1">
   <img src="https://img.shields.io/badge/platform-verified%20on%20Windows-626b78" alt="Verified on Windows">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f47c76" alt="MIT license"></a>
 </p>
@@ -28,7 +28,7 @@ GittyDot brings an IntelliJ-inspired Git workflow to the Godot editor: a focused
 It is a fork of [Godit](https://github.com/rychtar/godit) 1.1.1, retaining its Git CLI backend and extending its editor integration. GittyDot runs your installed `git` from GDScript; it does not need the Godot Git GDExtension or a separate Version Control plugin.
 
 > [!IMPORTANT]
-> **0.2.0 is an early release.** The verified configuration is **Godot 4.7.2 on Windows**. Other engine versions, operating systems, and every inherited Git operation have not been validated. This update addresses the five UI issues recorded for 0.2.0.
+> **0.2.5 — Compatability Update.** Verified on Windows with **Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1**. Requires **Godot 4.4 or newer**; Godot 4.0–4.3 were assessed and remain unsupported because required editor APIs are absent. Other operating systems and unlisted builds remain unverified.
 
 <a id="features"></a>
 
@@ -76,7 +76,8 @@ Keep the folder named **`gittydot`**, directly under `addons/`. Enable only one 
 
 ### Requirements
 
-- **Godot 4.7.2 on Windows** is the tested setup.
+- **Godot 4.4+** is required. Tested on Windows with **4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1**.
+- **Godot 4.0–4.3 are unsupported**; their missing editor APIs require a separate backport.
 - **Git** must be installed and available on the editor's `PATH`.
 - The project must be inside a Git repository; GittyDot can initialize one through its dock.
 - Configure Git authentication before using remote operations.
@@ -138,7 +139,7 @@ Git hooks and helpers run with your permissions. GittyDot does not sandbox repos
 ## 📖 Documentation
 
 - [Usage guide](https://github.com/Shinydarkraii/gittydot/blob/main/GUIDE.md) — comparisons, staging, amend, auto-save, recovery, preferences, and authentication.
-- [0.2.0 roadmap](https://github.com/Shinydarkraii/gittydot/blob/main/ROADMAP.md) — implemented UI fixes and acceptance checks.
+- [Release roadmap](https://github.com/Shinydarkraii/gittydot/blob/main/ROADMAP.md) — implemented UI fixes and acceptance checks.
 - [Maintainer notes](https://github.com/Shinydarkraii/gittydot/blob/main/MAINTAINING.md) — architecture, ownership, and behavior contracts.
 - [Upstream README](https://github.com/Shinydarkraii/gittydot/blob/main/UPSTREAM_README.md) and [source baseline](https://github.com/Shinydarkraii/gittydot/blob/main/upstream.json) — Godit provenance; upstream installation instructions describe Godit.
 
@@ -146,7 +147,7 @@ Git hooks and helpers run with your permissions. GittyDot does not sandbox repos
 
 ## 🧪 Testing
 
-The latest graphical verification on **2026-10-15** passed **265 editor integration checks**, with **0 failures**, **0 script errors**, 0 engine errors, and none of the reported Unicode, missing-process, or raw-icon startup diagnostics. It ran on **Godot 4.7.2 / Windows / Git 2.53.0**. A separate 34-check graphical compatibility run also passed using Git 2.36.1.
+The latest graphical verification on **2026-10-23** passed **282 editor integration checks on each of Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1**, with **0 failures, 0 script errors, 0 engine errors**, and no reported startup diagnostics in the final runs. It ran on **Windows / Git 2.53.0**. The earlier Git 2.36.1 compatibility result is historical; it has not been rerun for 0.2.5.
 
 The checks exercise real editor saves and Undo, partial staging, editable comparisons, recovery, historical diffs, selected-commit amendments, console diagnostics, file/folder actions, gutter geometry, and split-pane scrolling. Separate first-install and restart checks verified initialization with GitHub CLI absent.
 

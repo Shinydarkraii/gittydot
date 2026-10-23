@@ -5,6 +5,7 @@ extends RefCounted
 const Dialogs := preload("res://addons/gittydot/dock/widgets/dialogs.gd")
 const Settings := preload("res://addons/gittydot/util/settings.gd")
 const ScriptAutosave := preload("res://addons/gittydot/util/script_autosave.gd")
+const EditorOpen := preload("res://addons/gittydot/util/editor_open.gd")
 const WorkingDiff := preload("res://addons/gittydot/dock/widgets/working_diff.gd")
 
 const ALWAYS_SAVE_SETTING_KEY := "save_before_git"
@@ -19,22 +20,24 @@ static func flush_scripts() -> bool:
 ## res:// paths of open scenes and scripts with unsaved edits (untitled scenes excluded: there's no file to save them to).
 static func unsaved_files() -> PackedStringArray:
 	var paths := WorkingDiff.dirty_paths()
-	for path in EditorInterface.get_unsaved_scenes():
+	for path in EditorOpen.unsaved_scenes():
 		if not path.is_empty():
 			paths.append(path)
 	var script_editor := EditorInterface.get_script_editor()
 	if script_editor != null:
-		for path in script_editor.get_unsaved_files():
+		for path in EditorOpen.unsaved_scripts():
 			if not path.is_empty() and not paths.has(path):
 				paths.append(path)
 	return paths
 
 
-static func save_all() -> void:
+static func save_all() -> bool:
 	var script_editor := EditorInterface.get_script_editor()
 	if script_editor != null:
-		script_editor.save_all_scripts()
+		if not EditorOpen.save_all_scripts():
+			return false
 	EditorInterface.save_all_scenes()
+	return EditorOpen.unsaved_scripts().is_empty()
 
 
 ## Coroutine. verb names the operation ("Commit", "Checkout"...); for_commit says the risk is missing edits rather than overwritten ones. False = the user cancelled.
@@ -50,8 +53,7 @@ static func ensure_saved(parent: Node, verb: String, for_commit := false) -> boo
 	if unsaved.is_empty():
 		return true
 	if Settings.get_value(ALWAYS_SAVE_SETTING_KEY, false):
-		save_all()
-		return true
+		return save_all()
 	var shown := Array(unsaved.slice(0, 8)).map(func(p: String) -> String: return "  " + p.trim_prefix("res://"))
 	if unsaved.size() > 8:
 		shown.append("  … and %d more" % (unsaved.size() - 8))
@@ -62,10 +64,10 @@ static func ensure_saved(parent: Node, verb: String, for_commit := false) -> boo
 			{ "save": "Save and %s" % verb, "always": "Always Save First", "skip": "%s Without Saving" % verb })
 	match answer:
 		"save":
-			save_all()
+			return save_all()
 		"always":
 			Settings.set_value(ALWAYS_SAVE_SETTING_KEY, true)
-			save_all()
+			return save_all()
 		"skip":
 			pass
 		_:

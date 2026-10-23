@@ -217,11 +217,13 @@ func _code_edit(text: String, editable: bool) -> CodeEdit:
 	edit.text = text
 	edit.editable = editable
 	edit.gutters_draw_line_numbers = true
-	edit.scroll_fit_content_height = true
+	var fits := EditorOpen.optional_property(edit, &"scroll_fit_content_height", true)
 	edit.custom_minimum_size = UiScale.size(0, 48)
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if Engine.is_editor_hint() and EditorInterface.get_editor_theme() != null and EditorInterface.get_editor_theme().has_font("source", "EditorFonts"):
 		edit.add_theme_font_override("font", EditorInterface.get_editor_theme().get_font("source", "EditorFonts"))
+	if not fits:
+		edit.custom_minimum_size.y = maxf(edit.custom_minimum_size.y, EditorOpen.code_content_size(edit).y)
 	return edit
 
 

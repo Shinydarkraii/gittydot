@@ -112,7 +112,7 @@ func flush_pending() -> bool:
 	if not dirty:
 		return true
 	_saving = true
-	EditorInterface.get_script_editor().save_all_scripts()
+	EditorOpen.save_all_scripts()
 	_saving = false
 	var saved := true
 	for tab: Dictionary in _tabs.values():

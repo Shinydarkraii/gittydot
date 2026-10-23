@@ -26,8 +26,14 @@ func attach(editor: CodeEdit, own_gutter := false) -> void:
 	code.text_set.connect(clear)
 	code.lines_edited_from.connect(_on_lines_edited)
 	if own_gutter:
-		code.add_gutter()
-		var index := code.get_gutter_count() - 1
+		var index := -1
+		for gutter in code.get_gutter_count():
+			if code.get_gutter_name(gutter) == GUTTER:
+				index = gutter
+				break
+		if index < 0:
+			code.add_gutter()
+			index = code.get_gutter_count() - 1
 		code.set_gutter_name(index, GUTTER)
 		code.set_gutter_width(index, 1)
 		code.set_gutter_draw(index, true)

@@ -6,7 +6,8 @@ const GitConsole := preload("res://addons/gittydot/dock/widgets/git_console.gd")
 const RepoInitView := preload("res://addons/gittydot/dock/widgets/repo_init_view.gd")
 
 @onready var _message_label: Label = %MessageLabel
-@onready var _history_panel: Control = %HistoryPanel
+var _history_panel: Control
+var _initialized := false
 
 ## A git_cli_repo.gd instance, or null if this project isn't a git repo.
 var _repo: RefCounted
@@ -18,6 +19,15 @@ signal changes_requested(action: String)
 
 
 func _ready() -> void:
+	# The editor can request ready again after relocating a bottom-panel dock.
+	# Keep references: setup moves HistoryPanel into the runtime Log tab, so its
+	# original scene-unique lookup no longer resolves on subsequent ready calls.
+	if _initialized:
+		return
+	_history_panel = get_node_or_null("HistoryPanel")
+	if not is_instance_valid(_history_panel):
+		return
+	_initialized = true
 	var opened := RepoOpener.open_current_project_repo()
 	if opened["repo"] == null:
 		_history_panel.visible = false

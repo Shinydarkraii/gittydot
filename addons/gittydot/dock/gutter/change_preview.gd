@@ -60,7 +60,6 @@ func open(code_edit: CodeEdit, regions: Array, index: int, rel_path: String) -> 
 		_old_view.text = "\n".join(old_lines)
 		_old_view.editable = false
 		_old_view.context_menu_enabled = false
-		_old_view.scroll_fit_content_height = false
 		_old_view.add_theme_font_override("font", code_edit.get_theme_font("font"))
 		_old_view.add_theme_font_size_override("font_size", code_edit.get_theme_font_size("font_size"))
 		# Native background; the layer renderer distinguishes modifications from deletions.

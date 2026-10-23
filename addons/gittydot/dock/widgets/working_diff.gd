@@ -83,9 +83,9 @@ func _init() -> void:
 		var code := CodeEdit.new()
 		code.editable = side == 1
 		code.gutters_draw_line_numbers = true
-		code.gutters_line_numbers_min_digits = 4
-		code.scroll_fit_content_height = true
-		code.scroll_fit_content_width = true
+		EditorOpen.optional_property(code, &"gutters_line_numbers_min_digits", 4)
+		EditorOpen.optional_property(code, &"scroll_fit_content_height", true)
+		EditorOpen.optional_property(code, &"scroll_fit_content_width", true)
 		code.wrap_mode = TextEdit.LINE_WRAPPING_NONE
 		code.highlight_current_line = side == 1
 		code.add_theme_color_override("font_readonly_color", code.get_theme_color("font_color"))
@@ -104,8 +104,21 @@ func _init() -> void:
 	add_child(_timer)
 
 
+func _enter_tree() -> void:
+	# Editor main-screen/dock reparenting can re-enter without another _ready.
+	# Wait until the CodeEdits have their editor theme and tree membership.
+	_attach_layers.call_deferred()
+
+
 func _ready() -> void:
-	_instances.append(self)
+	_attach_layers()
+
+
+func _attach_layers() -> void:
+	if not is_inside_tree() or _highlights.size() == 2:
+		return
+	if not _instances.has(self):
+		_instances.append(self)
 	for side in 2:
 		var code := _codes[side]
 		var layer := Highlights.new()
@@ -114,14 +127,17 @@ func _ready() -> void:
 		_highlights.append(layer)
 		# Runtime-only UI: an overlay must draw after the overflowing CodeEdit.
 		# Top-level Controls are excluded from ScrollContainer content sizing.
-		var navigation := NavigationLayer.new()
-		navigation.view = self
-		navigation.side = side
-		navigation.set_as_top_level(true)
-		navigation.z_as_relative = false
-		navigation.clip_contents = true
-		_panes[side].add_child(navigation)
-		_navigation.append(navigation)
+		if _navigation.size() <= side:
+			var navigation := NavigationLayer.new()
+			navigation.view = self
+			navigation.side = side
+			navigation.set_as_top_level(true)
+			navigation.z_as_relative = false
+			navigation.clip_contents = true
+			_panes[side].add_child(navigation)
+			_navigation.append(navigation)
+	_navigation_signature = ""
+	_update_diff()
 
 
 static func flush_all() -> bool:
@@ -149,10 +165,10 @@ static func apply_auto_save_policy() -> void:
 
 static func native_dirty(path: String) -> bool:
 	var local := ProjectSettings.localize_path(path)
-	if local in EditorInterface.get_unsaved_scenes():
+	if local in EditorOpen.unsaved_scenes():
 		return true
 	var scripts := EditorInterface.get_script_editor()
-	return scripts != null and local in scripts.get_unsaved_files()
+	return scripts != null and local in EditorOpen.unsaved_scripts()
 
 
 ## Existing, project-local, losslessly decoded text only; binaries stay in DiffView.
@@ -394,13 +410,16 @@ func _align() -> void:
 	# Reset overrides before measuring, then retain equal pixel ranges on both sides.
 	for code in _codes:
 		code.custom_minimum_size = Vector2.ZERO
-	var height := maxf(_codes[0].get_minimum_size().y, _codes[1].get_minimum_size().y)
+	var sizes := []
+	for code in _codes:
+		sizes.append(code.get_minimum_size() if code.has_method("set_fit_content_height_enabled") else EditorOpen.code_content_size(code))
+	var height := maxf(sizes[0].y, sizes[1].y)
 	var overflow := 0.0
 	var widths := []
 	for side in 2:
 		var width := _panes[side].size.x - UiScale.px(42) - (_panes[side].get_v_scroll_bar().size.x if _panes[side].get_v_scroll_bar().visible else 0.0)
 		widths.append(width)
-		overflow = maxf(overflow, _codes[side].get_minimum_size().x - width)
+		overflow = maxf(overflow, sizes[side].x - width)
 	for side in 2:
 		_codes[side].custom_minimum_size = Vector2(widths[side] + maxf(0.0, overflow), height)
 		_panes[side].get_minimum_size()

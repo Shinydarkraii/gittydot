@@ -34,7 +34,7 @@ static func open_file(repo_root: String, path: String) -> String:
 		# Preserve native drafts; refresh clean tabs before reusing the cached script.
 		sync_open_scripts()
 		var native := EditorInterface.get_script_editor()
-		var dirty := native != null and res_path in native.get_unsaved_files()
+		var dirty: bool = native != null and res_path in unsaved_scripts()
 		var script := ResourceLoader.load(res_path, "Script", ResourceLoader.CACHE_MODE_REUSE if dirty else ResourceLoader.CACHE_MODE_REPLACE) as Script
 		if script == null:
 			return "Failed to load script:\n%s" % res_path
@@ -197,3 +197,78 @@ static func _replace_text_keeping_view(code_edit: CodeEdit, text: String) -> voi
 	code_edit.set_caret_line(mini(caret_line, code_edit.get_line_count() - 1))
 	code_edit.set_caret_column(caret_column)
 	code_edit.scroll_vertical = scroll
+
+
+## Older editors expose dirty text buffers but not ScriptEditor.get_unsaved_files.
+static func unsaved_scripts() -> PackedStringArray:
+	var editor := EditorInterface.get_script_editor()
+	if editor == null:
+		return PackedStringArray()
+	if editor.has_method("get_unsaved_files"):
+		return editor.call("get_unsaved_files")
+	var paths := PackedStringArray()
+	for tab: Dictionary in _open_tabs(editor):
+		var code := tab["editor"].get_base_editor() as CodeEdit
+		if code != null and code.get_version() != code.get_saved_version():
+			paths.append(tab["path"])
+	return paths
+
+
+## Prefer the public API. Older editors mark dirty scenes in their scene-tab titles.
+## Match the scene strip by its native class, and fail conservatively if its layout
+## cannot be identified: never silently treat an unknown open scene as saved.
+static func unsaved_scenes() -> PackedStringArray:
+	if EditorInterface.has_method("get_unsaved_scenes"):
+		return EditorInterface.call("get_unsaved_scenes")
+	var paths := EditorInterface.get_open_scenes()
+	for strip: Node in EditorInterface.get_base_control().find_children("*", "EditorSceneTabs", true, false):
+		for tabs: TabBar in strip.find_children("*", "TabBar", true, false):
+			if tabs.tab_count != paths.size():
+				continue
+			var dirty := PackedStringArray()
+			for i in paths.size():
+				if tabs.get_tab_title(i).ends_with("(*)"):
+					dirty.append(paths[i])
+			return dirty
+	return paths
+
+
+## Before save_all_scripts was exposed, the native editor already connected its
+## autosave timer to the same implementation. Reuse that exact callable without
+## changing its timer/settings or taking the menu's unrelated reload-prompt path.
+## If the native callback cannot be identified, fail and keep the buffers dirty.
+static func save_all_scripts() -> bool:
+	var editor := EditorInterface.get_script_editor()
+	if editor == null:
+		return true
+	if editor.has_method("save_all_scripts"):
+		editor.call("save_all_scripts")
+		return true
+	if unsaved_scripts().is_empty():
+		return true
+	for timer: Timer in editor.find_children("*", "Timer", true, false):
+		for connection: Dictionary in timer.get_signal_connection_list("timeout"):
+			var callback: Callable = connection["callable"]
+			if callback.get_object() == editor and callback.get_method() in [&"_autosave_scripts", &"ScriptEditor::_autosave_scripts"]:
+				callback.call()
+				return true
+	return false
+
+
+static func optional_property(object: Object, property: StringName, value: Variant) -> bool:
+	for entry: Dictionary in object.get_property_list():
+		if entry["name"] == property:
+			object.set(property, value)
+			return true
+	return false
+
+
+## Content fitting was added after 4.4. Measure native shaped line widths and
+## gutters on older editors, keeping scrollbars outside the full text buffer.
+static func code_content_size(code: CodeEdit) -> Vector2:
+	var style := code.get_theme_stylebox("normal")
+	var width := 0.0
+	for line in code.get_line_count():
+		width = maxf(width, code.get_line_width(line))
+	return Vector2(width + code.get_total_gutter_width() + style.get_minimum_size().x + code.get_v_scroll_bar().get_minimum_size().x,
+		code.get_line_height() * code.get_line_count() + style.get_minimum_size().y + code.get_h_scroll_bar().get_minimum_size().y)

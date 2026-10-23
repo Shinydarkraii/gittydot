@@ -29,11 +29,10 @@ static func scale_scene(root: Node) -> void:
 		scale_scene(child)
 
 
-## True when the node is part of a scene open for editing (a @tool _ready runs there too, and whatever it sets gets saved into the .tscn); edited scenes live in the editor's scene viewport.
+## Only authored-scene ancestry identifies editor content. Viewport membership
+## is not an ownership boundary for plugin UI.
 static func is_in_edited_scene(node: Node) -> bool:
 	if not Engine.is_editor_hint() or not node.is_inside_tree():
 		return false
-	if node.get_viewport() == EditorInterface.get_editor_viewport_2d():
-		return true
 	var edited := node.get_tree().edited_scene_root
 	return edited != null and (edited == node or edited.is_ancestor_of(node))

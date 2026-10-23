@@ -1,6 +1,6 @@
 # Maintaining GittyDot
 
-GittyDot 0.2.0 is a fork of the Godit 1.1.1 package, for Godot 4.7.2 on Windows. The original MIT license and author attribution remain in LICENSE. UPSTREAM_README.md preserves the upstream instructions. upstream.json records the source package's checksums before customization.
+GittyDot 0.2.5 (Compatability Update) is a fork of the Godit 1.1.1 package, verified on Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1 on Windows. The original MIT license and author attribution remain in LICENSE. UPSTREAM_README.md preserves the upstream instructions. upstream.json records the source package's checksums before customization.
 
 ## Source boundaries
 
@@ -70,3 +70,19 @@ OptionButton.fit_to_longest_item must remain off in Commit. Keep the layout orig
 Use `--visual --ui-only` for the focused layout/navigation/color loop and `--editor-scale 1.5` for increased scale. Run the full graphical suite for save/recovery/native-editor and Git regressions. The portable test editor disables update polling and the runner fails on engine errors as well as script and startup diagnostics.
 
 Windows Git compatibility is determined on the main thread in `GitCli.prepare_environment()` before watchers/jobs start. Every repository command uses `argv()` to disable the legacy experimental monitor, and Git older than 2.37 additionally disables the modern monitor flag. Do not probe versions in worker threads or rewrite system/global config to enforce this policy. Fixture setup also disables inherited monitors so old-Git testing cannot spawn experimental daemons.
+
+## Editor lifecycle compatibility
+
+Identify authored-scene content using `edited_scene_root` ancestry, never viewport equality. Plugin docks must initialize their runtime controls even while a native scene is open. WorkingDiff detaches drawing hooks and save registration on exit, then restores them after every tree entry; `_ready()` alone does not repeat after reparenting. Reuse its named custom gutter and navigation overlays to avoid duplicates. Keep the full text buffers, caret and Undo intact.
+
+The test runner isolates portable editors by actual version/build and display scale, and writes `editor_settings-<major>.<minor>.tres` for that engine. Do not share a mutable engine copy or assume 4.7 settings cover a 4.8 run. Tests cover panel initialization with an authored scene open, repeated comparison reparenting, draw hooks and save registration.
+
+The Git Log dock must also tolerate repeated ready notifications: resolve its authored HistoryPanel only on first initialization, retain the runtime panel references, and never create duplicate Log/Console tabs or signal connections. History signal binding must tolerate a temporarily unavailable panel.
+
+## 0.2.5 compatibility contracts
+
+The minimum editor version is 4.4. Godot 4.0–4.3 lack required editor APIs (including EditorContextMenuPlugin) and are not supported by this package. Do not advertise all Godot 4.x versions as supported.
+
+Use EditorOpen's feature-detected helpers for dirty scripts/scenes and native saving. Older scene detection reads the native scene strip's dirty markers; if it cannot identify the strip, treat open scenes conservatively as potentially dirty. The legacy save helper reuses only the ScriptEditor's existing autosave callback, recognizing its native class-prefixed name, without changing timer settings. Fail closed if it cannot be found; never route auto-save through a menu that may open an unrelated reload dialog.
+
+On older CodeEdits, use shaped line widths, gutter widths, font line height and theme padding for full-document sizing. Newer engines retain their native content-fit properties. Preserve Undo, native saved markers, disk-conflict checks, partial staging, overview navigation and both sides' scroll ranges.

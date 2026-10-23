@@ -21,6 +21,7 @@ const Repo := preload("res://addons/gittydot/util/git_cli_repo.gd")
 const Dialogs := preload("res://addons/gittydot/dock/widgets/dialogs.gd")
 const WorkingDiff := preload("res://addons/gittydot/dock/widgets/working_diff.gd")
 const SaveGuard := preload("res://addons/gittydot/dock/widgets/save_guard.gd")
+const UiScale := preload("res://addons/gittydot/util/ui_scale.gd")
 
 class OldGitRepo:
 	extends "res://addons/gittydot/util/git_cli_repo.gd"
@@ -53,6 +54,9 @@ func _run() -> void:
 		_finish()
 		return
 	var repo: RefCounted = _fork.dock_instance._repo
+	check("Commit and Branches initialize their runtime controls", is_instance_valid(_fork.dock_instance._changes_panel._sync_bar) and is_instance_valid(_fork.dock_instance._branches_panel._sync_bar))
+	check("Git Log initializes its runtime toolbar", is_instance_valid(_fork.history_dock_instance._history_panel._branch_option) and is_instance_valid(_fork.history_dock_instance._history_panel._undo_button))
+	await _check_history_reentry()
 	_check_monitor_safety(repo)
 	if OS.get_cmdline_user_args().has("--gittydot-ui-only"):
 		await _check_narrow_commit(repo)
@@ -362,6 +366,10 @@ func _check_editable_diff(repo: RefCounted) -> void:
 		await get_tree().process_frame
 	check("working-file comparisons expose an editable right pane and read-only baseline", view.visible and right.editable and not view._codes[0].editable and not screen.diff_view._split.visible)
 	check("editable pane contains the full source without collapsed context or diff signs", right.text == FileAccess.get_file_as_string("res://editable.txt") and right.get_line_count() == 103 and not right.text.contains("unchanged lines"))
+	var attached: bool = view._highlights.size() == 2 and view._navigation.size() == 2 and WorkingDiff._instances.has(view)
+	check("working comparison attaches highlights navigation and save registration", attached)
+	if not attached:
+		return
 	check("editable comparison retains syntax, line numbers and highlighted modifications", right.gutters_draw_line_numbers and right.syntax_highlighter != null and view._highlights[1].rows.has(2) and view._highlights[1].rows.has(41))
 	check("editable comparison disables collapsed-context and hunk filtering options", screen.diff_view._options_button.get_popup().is_item_disabled(screen.diff_view._options_button.get_popup().get_item_index(DiffView.OPT_CONTEXT_3)))
 	# The native headless main screen can be narrower than both minimum panes.
@@ -378,6 +386,16 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	scrolling.show_file(screen.diff_view._context)
 	for frame in 6:
 		await get_tree().process_frame
+	var initial_gutters: int = scrolling._codes[1].get_gutter_count()
+	var initial_text: String = scrolling._codes[1].text
+	var initial_editor: CodeEdit = scrolling._codes[1]
+	for cycle in 3:
+		shell.remove_child(scrolling)
+		shell.add_child(scrolling)
+		for frame in 4:
+			await get_tree().process_frame
+		check("reparented comparison restores layers and save registration %d" % cycle, scrolling._highlights.size() == 2 and scrolling._navigation.size() == 2 and WorkingDiff._instances.has(scrolling))
+	check("comparison reparenting preserves buffers without accumulating gutters", scrolling._codes[1] == initial_editor and scrolling._codes[1].text == initial_text and scrolling._codes[1].get_gutter_count() == initial_gutters)
 	check("editable text panes use separate horizontal and vertical overflow scrollbars", scrolling._panes.all(func(pane: ScrollContainer) -> bool: return pane.get_h_scroll_bar().visible and pane.get_v_scroll_bar().visible))
 	scrolling._panes[1].scroll_horizontal = 80
 	check("editable comparison horizontal scrolling is synchronized", scrolling._panes[0].scroll_horizontal == 80)
@@ -568,6 +586,8 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	for frame in 4:
 		await get_tree().process_frame
 	screen.open_path("editable_scene.tscn")
+	var authored := EditorInterface.get_edited_scene_root()
+	check("authored scene guard recognizes scene root while excluding plugin panels", authored != null and UiScale.is_in_edited_scene(authored) and not UiScale.is_in_edited_scene(_fork.dock_instance._changes_panel) and not UiScale.is_in_edited_scene(_fork.dock_instance._branches_panel) and not UiScale.is_in_edited_scene(_fork.history_dock_instance._history_panel))
 	right.set_caret_line(right.get_line_count() - 1)
 	right.insert_text_at_caret("metadata/test_value = 2\n")
 	check("scene text is editable while the structured Scene view is disabled", view.visible and right.editable and screen.diff_view._scene_toggle.disabled)
@@ -576,6 +596,17 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	screen._open_native()
 	await get_tree().process_frame
 	check("Open in Editor reloads a clean cached scene after comparison edits", EditorInterface.get_edited_scene_root().get_meta("test_value", null) == 2)
+	check("compatibility scene detection excludes a saved scene", not Open.unsaved_scenes().has("res://editable_scene.tscn"))
+	EditorInterface.mark_scene_as_unsaved()
+	for frame in 2:
+		await get_tree().process_frame
+	check("compatibility scene detection retains an unsaved native scene", Open.unsaved_scenes().has("res://editable_scene.tscn"))
+	check("comparison save guard recognizes the dirty native scene", WorkingDiff.native_dirty(ProjectSettings.globalize_path("res://editable_scene.tscn")))
+	EditorInterface.save_scene()
+	for frame in 2:
+		await get_tree().process_frame
+	check("compatibility scene detection clears after native save", not Open.unsaved_scenes().has("res://editable_scene.tscn"))
+
 	screen.open_comparison({"kind": "commit", "path": "editable_scene.tscn", "oid": repo.get_head_oid(), "old_rev": repo.parent_or_empty_tree(repo.get_head_oid()), "new_rev": repo.get_head_oid()})
 	check("viewing scene history does not expose a writable working pane", not view.visible and not right.editable)
 	screen.open_path("editable_binary.bin")
@@ -590,6 +621,7 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	screen.open_path("tracked.gd")
 	var disk_before := FileAccess.get_file_as_string("res://tracked.gd")
 	native.insert_text_at_caret("# native draft\n")
+	check("compatibility script detection retains an unsaved native draft", Open.unsaved_scripts().has("res://tracked.gd"))
 	right.insert_text_at_caret("# comparison draft\n")
 	check("simultaneous native and comparison drafts block saving without overwriting either", not view.flush() and native.text.contains("native draft") and right.text.contains("comparison draft") and FileAccess.get_file_as_string("res://tracked.gd") == disk_before)
 	screen._open_native()
@@ -1207,3 +1239,27 @@ func _finish() -> void:
 	file.close()
 	print("GITTYDOT RESULT ", JSON.stringify(result))
 	get_tree().quit(0 if failed.is_empty() else 1)
+
+
+func _check_history_reentry() -> void:
+	var dock: Control = _fork.history_dock_instance
+	var history: Control = dock._history_panel
+	var console: Control = dock._console
+	var tabs: TabContainer = dock._tabs
+	var parent := dock.get_parent()
+	var count := dock.get_child_count()
+	for cycle in range(2):
+		parent.remove_child(dock)
+		dock.request_ready()
+		parent.add_child(dock)
+		await get_tree().process_frame
+		check("Git Log ready re-entry retains history, console and tabs %d" % cycle, dock._history_panel == history and dock._console == console and dock._tabs == tabs and dock.get_child_count() == count)
+		_fork._connect_history_diff()
+	check("Git Log re-entry keeps comparison and amend signals connected", history.is_connected("diff_requested", _fork._show_history_diff) and history.is_connected("amend_requested", _fork._prepare_amend))
+
+	# A source reload may briefly leave the panel reference unavailable.
+	dock._history_panel = null
+	_fork._connect_history_diff()
+	dock._history_panel = history
+	_fork._connect_history_diff()
+	check("history signal binding tolerates an unavailable panel without losing connections", history.is_connected("diff_requested", _fork._show_history_diff) and history.is_connected("amend_requested", _fork._prepare_amend))
