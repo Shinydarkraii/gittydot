@@ -1,7 +1,8 @@
 @tool
 extends VBoxContainer
-## Full documents only: the editable buffer never contains diff padding or headers.
+## Source documents remain separate from display-only alignment gaps.
 
+const AlignedCode := preload("res://addons/gittydot/dock/widgets/aligned_code_edit.gd")
 const EditorOpen := preload("res://addons/gittydot/util/editor_open.gd")
 const Dialogs := preload("res://addons/gittydot/dock/widgets/dialogs.gd")
 const GitCli := preload("res://addons/gittydot/util/git_cli.gd")
@@ -37,6 +38,7 @@ var _loading := false
 var _syncing := false
 var _saving := false
 var _regions: Array = []
+var _region_rows: Array = []
 var _block_reason := ""
 var _announced := ""
 var _navigation_signature := ""
@@ -80,9 +82,9 @@ func _init() -> void:
 		pane.add_theme_stylebox_override("panel", style)
 		_split.add_child(pane)
 		_panes.append(pane)
-		var code := CodeEdit.new()
+		var code := AlignedCode.new()
 		code.editable = side == 1
-		code.gutters_draw_line_numbers = true
+		code.gutters_draw_line_numbers = false
 		EditorOpen.optional_property(code, &"gutters_line_numbers_min_digits", 4)
 		EditorOpen.optional_property(code, &"scroll_fit_content_height", true)
 		EditorOpen.optional_property(code, &"scroll_fit_content_width", true)
@@ -94,8 +96,8 @@ func _init() -> void:
 		pane.resized.connect(_align.call_deferred)
 		pane.get_h_scroll_bar().value_changed.connect(_sync_scroll.bind(side, true))
 		pane.get_v_scroll_bar().value_changed.connect(_sync_scroll.bind(side, false))
-	_codes[1].text_changed.connect(_edited)
-	_codes[1].caret_changed.connect(_follow_caret.call_deferred)
+	_codes[1].source_changed.connect(_edited)
+	_codes[1].source_caret_changed.connect(_follow_caret.call_deferred)
 	_codes[1].gui_input.connect(_on_input)
 	_timer = Timer.new()
 	_timer.one_shot = true
@@ -223,17 +225,17 @@ func show_file(context: Dictionary) -> void:
 	if absolute != _absolute_path:
 		_absolute_path = absolute
 		_adopt_baseline(disk)
-		_codes[1].text = decode(disk)
-		_codes[1].tag_saved_version()
+		_codes[1].set_source_text(decode(disk))
+		_codes[1].mark_source_saved()
 		_restore_draft()
 		for pane in _panes:
 			pane.scroll_horizontal = 0
 			pane.scroll_vertical = 0
 	elif not is_dirty() and disk != _baseline:
 		_adopt_baseline(disk)
-		EditorOpen._replace_text_keeping_view(_codes[1], decode(disk))
-		_codes[1].tag_saved_version()
-	_codes[0].text = decode(_repo.get_file_bytes(context.get("old_rev", "HEAD"), context.get("old_path", _relative_path)))
+		_codes[1].set_source_text(decode(disk), false)
+		_codes[1].mark_source_saved()
+	_codes[0].set_source_text(decode(_repo.get_file_bytes(context.get("old_rev", "HEAD"), context.get("old_path", _relative_path))))
 	_codes[1].editable = true
 	_loading = false
 	var language := SyntaxColors.language_for(_relative_path) if Settings.get_value("diff_syntax", true) else ""
@@ -248,7 +250,7 @@ func show_file(context: Dictionary) -> void:
 
 
 func is_dirty() -> bool:
-	return not _absolute_path.is_empty() and is_instance_valid(_codes[1]) and _codes[1].text != decode(_baseline)
+	return not _absolute_path.is_empty() and is_instance_valid(_codes[1]) and _codes[1].get_source_text() != decode(_baseline)
 
 
 func _adopt_baseline(bytes: PackedByteArray) -> void:
@@ -278,7 +280,7 @@ func _save_after_pause() -> void:
 
 
 func _encoded() -> PackedByteArray:
-	var text := _codes[1].text.replace("\r\n", "\n")
+	var text: String = _codes[1].get_source_text().replace("\r\n", "\n")
 	if _crlf:
 		text = text.replace("\n", "\r\n")
 	var bytes := PackedByteArray([239, 187, 191]) if _bom else PackedByteArray()
@@ -326,7 +328,7 @@ func flush() -> bool:
 			return _blocked("Couldn't replace the working file (error %d). Check its permissions." % replaced)
 	_saving = true
 	_adopt_baseline(bytes)
-	_codes[1].tag_saved_version()
+	_codes[1].mark_source_saved()
 	_clear_recovery()
 	# Keep clean native script/text tabs in sync, while their Undo stays usable.
 	EditorOpen.sync_open_scripts()
@@ -370,8 +372,8 @@ func _reload_disk() -> void:
 		return
 	_loading = true
 	_adopt_baseline(disk)
-	_codes[1].text = decode(disk)
-	_codes[1].tag_saved_version()
+	_codes[1].set_source_text(decode(disk))
+	_codes[1].mark_source_saved()
 	_loading = false
 	_clear_recovery()
 	_update_diff()
@@ -381,19 +383,24 @@ func _reload_disk() -> void:
 func _update_diff() -> void:
 	if _repo == null or _absolute_path.is_empty() or _highlights.size() != 2:
 		return
-	_regions = DiffHunks.parse_regions(_repo.diff_texts(_codes[0].text, _codes[1].text))
+	_regions = DiffHunks.parse_regions(_repo.diff_texts(_codes[0].get_source_text(), _codes[1].get_source_text()))
+	var layout := alignment_rows(_regions, _codes[0].get_source_text(), _codes[1].get_source_text())
+	_region_rows = layout["regions"]
+	for side in 2:
+		_codes[side].set_alignment(layout["rows"][side])
+	var source_lines: PackedStringArray = _codes[1].get_source_text().split("\n")
 	var layers := [{}, {}]
 	for region: Dictionary in _regions:
 		var first: int = maxi(0, region["new_start"] - 1)
 		var current := PackedStringArray()
-		for line in range(first, mini(first + region["new_count"], _codes[1].get_line_count())):
-			current.append(_codes[1].get_line(line))
+		for line in range(first, mini(first + region["new_count"], source_lines.size())):
+			current.append(source_lines[line])
 		var changed := InlineDiff.build(region["old_lines"], current)
 		for side in 2:
 			var rows: Array = changed["old" if side == 0 else "new"]
 			var start: int = maxi(0, region["old_start" if side == 0 else "new_start"] - 1)
 			for offset in rows.size():
-				layers[side][start + offset] = rows[offset]
+				layers[side][_codes[side].source_to_row(start + offset)] = rows[offset]
 	for side in 2:
 		_highlights[side].set_rows(layers[side])
 		if _codes[side].syntax_highlighter is WorkingSyntax:
@@ -433,10 +440,7 @@ func _sync_scroll(value: float, side: int, horizontal: bool) -> void:
 	if horizontal:
 		_panes[1 - side].get_h_scroll_bar().value = value
 	else:
-		var height := float(_codes[side].get_line_height())
-		var line := value / height
-		var mapped := map_line(line, side)
-		_panes[1 - side].get_v_scroll_bar().value = mapped * height
+		_panes[1 - side].get_v_scroll_bar().value = value
 	_syncing = false
 	for pane in _panes:
 		pane.queue_redraw()
@@ -469,8 +473,8 @@ func _overview_rect(side: int) -> Rect2:
 
 func _range(region: Dictionary, side: int) -> Vector2i:
 	var count: int = region["old_count" if side == 0 else "new_count"]
-	var start: int = region["old_start" if side == 0 else "new_start"]
-	return Vector2i(maxi(0, start - 1 if count > 0 else start), count)
+	var index := _regions.find(region)
+	return Vector2i(_region_rows[index].x, count) if index >= 0 and index < _region_rows.size() else Vector2i.ZERO
 
 
 func _draw_navigation(side: int, canvas: Control) -> void:
@@ -536,26 +540,38 @@ func _navigation_input(event: InputEvent, side: int) -> void:
 			_navigation[side].accept_event()
 
 
-## Nearest corresponding source line, without inserting editable phantom rows.
-func map_line(line: float, side: int) -> float:
-	var delta := 0.0
-	for region: Dictionary in _regions:
-		var source: int = region["old_start" if side == 0 else "new_start"]
-		var count: int = region["old_count" if side == 0 else "new_count"]
-		var target: int = region["new_start" if side == 0 else "old_start"]
-		var other_count: int = region["new_count" if side == 0 else "old_count"]
-		var start := float(source - 1 if count > 0 else source)
-		var to := float(target - 1 if other_count > 0 else target)
-		if line < start:
-			break
-		if count > 0 and line < start + count:
-			return maxf(0.0, to + minf(line - start, maxf(0.0, other_count - 1)))
-		delta = to + other_count - start - count
-	return maxf(0.0, line + delta)
+## Both panes now share visual rows, including the gaps opposite unmatched lines.
+func map_line(line: float, _side: int) -> float:
+	return maxf(0.0, line)
+
+
+static func alignment_rows(regions: Array, old_text: String, new_text: String) -> Dictionary:
+	var rows := [[], []]
+	var positions := [0, 0]
+	var sizes := [old_text.split("\n").size() if not old_text.is_empty() else 0, new_text.split("\n").size() if not new_text.is_empty() else 0]
+	var changed := []
+	for region: Dictionary in regions:
+		var counts := [int(region["old_count"]), int(region["new_count"])]
+		var starts := [int(region["old_start"]) - (1 if counts[0] > 0 else 0), int(region["new_start"]) - (1 if counts[1] > 0 else 0)]
+		while positions[0] < starts[0] or positions[1] < starts[1]:
+			for side in 2:
+				rows[side].append(positions[side] if positions[side] < starts[side] else -1)
+				positions[side] += 1 if positions[side] < starts[side] else 0
+		changed.append(Vector2i(rows[0].size(), maxi(counts[0], counts[1])))
+		for offset in maxi(counts[0], counts[1]):
+			for side in 2:
+				rows[side].append(positions[side] + offset if offset < counts[side] else -1)
+		for side in 2:
+			positions[side] += counts[side]
+	while positions[0] < sizes[0] or positions[1] < sizes[1]:
+		for side in 2:
+			rows[side].append(positions[side] if positions[side] < sizes[side] else -1)
+			positions[side] += 1 if positions[side] < sizes[side] else 0
+	return {"rows": rows, "regions": changed}
 
 
 func scroll_to_line(line: int) -> void:
-	_codes[1].set_caret_line(clampi(line - 1, 0, _codes[1].get_line_count() - 1))
+	_codes[1].set_source_caret(line - 1)
 	_follow_caret()
 
 
@@ -598,7 +614,7 @@ func _save_recovery() -> void:
 		return
 	var file := FileAccess.open(_recovery_path(), FileAccess.WRITE)
 	if file != null:
-		file.store_string(JSON.stringify({"path": _absolute_path, "baseline": Marshalls.raw_to_base64(_baseline), "text": _codes[1].text}))
+		file.store_string(JSON.stringify({"path": _absolute_path, "baseline": Marshalls.raw_to_base64(_baseline), "text": _codes[1].get_source_text()}))
 		file.close()
 
 
@@ -608,7 +624,7 @@ func _restore_draft() -> void:
 	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(_recovery_path()))
 	if data is Dictionary and data.get("path", "") == _absolute_path and data.get("text", null) is String:
 		_adopt_baseline(Marshalls.base64_to_raw(data.get("baseline", "")))
-		_codes[1].text = data["text"]
+		_codes[1].set_source_text(data["text"])
 		_block_reason = "Recovered unsaved comparison edits. Review them, then Save or Reload."
 
 

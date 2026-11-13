@@ -58,6 +58,7 @@ func _run() -> void:
 	check("Git Log initializes its runtime toolbar", is_instance_valid(_fork.history_dock_instance._history_panel._branch_option) and is_instance_valid(_fork.history_dock_instance._history_panel._undo_button))
 	await _check_history_reentry()
 	_check_monitor_safety(repo)
+	await _check_alignment_source(repo)
 	if OS.get_cmdline_user_args().has("--gittydot-ui-only"):
 		await _check_narrow_commit(repo)
 		await _check_editable_diff(repo)
@@ -354,6 +355,87 @@ func _check_narrow_commit(repo: RefCounted) -> void:
 	await get_tree().process_frame
 
 
+func _check_alignment_source(repo: RefCounted) -> void:
+	var code := preload("res://addons/gittydot/dock/widgets/aligned_code_edit.gd").new()
+	EditorInterface.get_base_control().add_child(code)
+	code.hide()
+	for pair in [["a\nb\nc", "a\nc"], ["a\nc", "a\nb\nc"], ["a\nb\nc\nd", "a\nx\nd"], ["", "a\nb"], ["a\nb", ""], ["a", "b\nc\na"], ["a\nb", "a\nb\nc\nd"], ["a\nb\n", "a\n"]]:
+		var layout := WorkingDiff.alignment_rows(preload("res://addons/gittydot/util/diff_hunks.gd").parse_regions(repo.diff_texts(pair[0], pair[1])), pair[0], pair[1])
+		var valid: bool = layout["rows"][0].size() == layout["rows"][1].size()
+		for side in 2:
+			code.set_source_text(pair[side])
+			code.set_alignment(layout["rows"][side])
+			var actual := []
+			for row in code.source_rows.size():
+				var line: int = code.source_rows[row]
+				valid = valid and code.get_line(row) == (pair[side].split("\n")[line] if line >= 0 else "")
+				valid = valid and code.get_line_gutter_text(row, code._number_gutter) == (str(line + 1) if line >= 0 else "")
+				if line >= 0:
+					actual.append(line)
+			valid = valid and actual == (range(pair[side].split("\n").size()) if not pair[side].is_empty() else []) and code.get_source_text() == pair[side]
+		check("alignment preserves source and gap labels: %s -> %s" % [pair[0].replace("\n", "/"), pair[1].replace("\n", "/")], valid)
+	code.set_source_text("alpha\nomega")
+	code.set_alignment([0, -1, -1, 1])
+	code.select(0, 0, 3, 5)
+	check("copy across visual gaps contains only source newlines", code.selected_source_text() == "alpha\nomega")
+	code.insert_text_at_caret("pasted\ncontent")
+	await get_tree().process_frame
+	check("multiline paste across gaps replaces only source", code.get_source_text() == "pasted\ncontent")
+	code._menu_action(TextEdit.MENU_UNDO)
+	check("context-menu Undo restores source without padding", code.get_source_text() == "alpha\nomega")
+	code._menu_action(TextEdit.MENU_REDO)
+	check("context-menu Redo restores paste without padding", code.get_source_text() == "pasted\ncontent")
+	code.set_source_text("alpha\nomega")
+	code.set_alignment([0, -1, -1, 1])
+	code.set_source_caret(1, 5)
+	code.insert_text_at_caret("!")
+	await get_tree().process_frame
+	check("typing after a gap edits the corresponding source line", code.get_source_text() == "alpha\nomega!")
+	code.set_alignment([0, -1, -1, 1])
+	code.undo_source()
+	check("rebuilding alignment preserves source Undo", code.get_source_text() == "alpha\nomega")
+	code.set_alignment([0, -1, -1, 1])
+	code.select(0, 0, 3, 5)
+	var indent := InputEventKey.new()
+	indent.keycode = KEY_TAB
+	indent.pressed = true
+	code._source_input(indent)
+	check("multiline indentation skips display gaps", code.get_source_text() == "\talpha\n\tomega")
+	code.undo_source()
+	code.deselect()
+	code.set_alignment([0, -1, -1, 1])
+	code.set_caret_line(1)
+	code.set_caret_column(0)
+	code.insert_text_at_caret("inserted")
+	await get_tree().process_frame
+	check("typing in a gap creates one line and retains the typed-text caret", code.get_source_text() == "alpha\ninserted\nomega" and code._source.get_caret_line() == 1 and code._source.get_caret_column() == 8)
+	code.set_source_text("alpha\nomega")
+	code.set_alignment([0, -1, -1, 1])
+	code.set_source_caret(1)
+	check("Backspace crosses gaps without getting stuck", code._delete_across_gap(KEY_BACKSPACE) and code.get_source_text() == "alphaomega")
+	code.undo_source()
+	code.set_alignment([0, -1, -1, 1])
+	code.set_source_caret(0, 5)
+	check("Delete crosses gaps without inserting padding", code._delete_across_gap(KEY_DELETE) and code.get_source_text() == "alphaomega")
+	code.set_source_text("alpha")
+	code.set_alignment([0, -1, -1])
+	code.select(0, 0, 2, 0)
+	check("selection through trailing gaps includes actual EOF", code.selected_source_text() == "alpha")
+	code.deselect()
+	code.set_caret_line(2)
+	code.insert_text_at_caret("end")
+	await get_tree().process_frame
+	check("typing in a trailing gap creates a line after EOF", code.get_source_text() == "alpha\nend")
+	code.set_source_text("alpha\nomega")
+	code.set_source_caret(1, 3)
+	code.set_source_text("alpha\nexternal", false)
+	check("external reload retains source caret and Undo", code._source.get_caret_line() == 1 and code._source.get_caret_column() == 3 and code._source.has_undo())
+	code.undo_source()
+	check("external reload Undo restores source", code.get_source_text() == "alpha\nomega")
+	code.queue_free()
+	await get_tree().process_frame
+
+
 func _check_editable_diff(repo: RefCounted) -> void:
 	var screen: Control = _fork.main_screen
 	EditorInterface.set_main_screen_editor("GittyDot")
@@ -365,12 +447,13 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	for frame in 6:
 		await get_tree().process_frame
 	check("working-file comparisons expose an editable right pane and read-only baseline", view.visible and right.editable and not view._codes[0].editable and not screen.diff_view._split.visible)
-	check("editable pane contains the full source without collapsed context or diff signs", right.text == FileAccess.get_file_as_string("res://editable.txt") and right.get_line_count() == 103 and not right.text.contains("unchanged lines"))
+	check("editable pane contains the full source without collapsed context or diff signs", right.get_source_text() == FileAccess.get_file_as_string("res://editable.txt") and right.get_source_text().split("\n").size() == 103 and not right.text.contains("unchanged lines"))
 	var attached: bool = view._highlights.size() == 2 and view._navigation.size() == 2 and WorkingDiff._instances.has(view)
 	check("working comparison attaches highlights navigation and save registration", attached)
 	if not attached:
 		return
-	check("editable comparison retains syntax, line numbers and highlighted modifications", right.gutters_draw_line_numbers and right.syntax_highlighter != null and view._highlights[1].rows.has(2) and view._highlights[1].rows.has(41))
+	check("side-by-side insertions reserve blank rows in the baseline", view._codes[0].get_line_count() == right.get_line_count() and view._codes[0].get_line(41).is_empty() and view._codes[0].get_line(42).is_empty() and view._codes[0].get_line(43) == right.get_line(43))
+	check("editable comparison retains syntax, line numbers and highlighted modifications", right.get_gutter_name(right._number_gutter) == "gittydot_source_numbers" and right.syntax_highlighter != null and view._highlights[1].rows.has(2) and view._highlights[1].rows.has(41))
 	check("editable comparison disables collapsed-context and hunk filtering options", screen.diff_view._options_button.get_popup().is_item_disabled(screen.diff_view._options_button.get_popup().get_item_index(DiffView.OPT_CONTEXT_3)))
 	# The native headless main screen can be narrower than both minimum panes.
 	var shell := PanelContainer.new()
@@ -400,6 +483,7 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	scrolling._panes[1].scroll_horizontal = 80
 	check("editable comparison horizontal scrolling is synchronized", scrolling._panes[0].scroll_horizontal == 80)
 	scrolling._panes[1].scroll_vertical = int(scrolling._codes[1].get_line_height() * 60)
+	check("aligned panes keep equal scroll offsets across inserted blocks", scrolling._panes[0].scroll_vertical == scrolling._panes[1].scroll_vertical)
 	check("editable comparison vertical scrolling follows matching source lines across insertions", absf(float(scrolling._panes[0].scroll_vertical) / scrolling._codes[1].get_line_height() - scrolling.map_line(60, 1)) < 0.2)
 	var width: float = scrolling._panes[0].size.x
 	scrolling._split.split_offset = 90
@@ -409,10 +493,10 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	var left_end: float = scrolling._panes[0].get_h_scroll_bar().max_value - scrolling._panes[0].get_h_scroll_bar().page
 	var right_end: float = scrolling._panes[1].get_h_scroll_bar().max_value - scrolling._panes[1].get_h_scroll_bar().page
 	check("editable panes retain a common horizontal end range after resize", absf(left_end - right_end) <= 1.0)
-	var source_before: String = scrolling._codes[1].text
+	var source_before: String = scrolling._codes[1].get_source_text()
 	var caret_before: int = scrolling._codes[1].get_caret_line()
 	# Put a deletion at EOF and a replacement near the end of the baseline.
-	scrolling._codes[0].text = scrolling._codes[0].text.replace("line 90: original", "line 90: previous") + "deleted final line\n"
+	scrolling._codes[0].set_source_text(scrolling._codes[0].get_source_text().replace("line 90: original", "line 90: previous") + "deleted final line\n")
 	scrolling._update_diff()
 	check("working diff uses committed addition and deletion palette without changing native script colors", scrolling._highlights[0].workspace_side == 0 and scrolling._highlights[1].workspace_side == 1 and DiffView.DiffRows.COLOR_ADDED_BG == preload("res://addons/gittydot/util/diff_palette.gd").ADDED_BG)
 	check("overview includes start middle end and deletion-only changes", scrolling._regions.size() >= 4 and scrolling._regions.any(func(region: Dictionary) -> bool: return region["new_count"] == 0))
@@ -422,7 +506,7 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	click.pressed = true
 	click.position = Vector2(overview.get_center().x, overview.end.y - 2)
 	scrolling._navigation[1]._gui_input(click)
-	check("clicking overview reveals end changes without moving caret or editing source", scrolling._panes[1].scroll_vertical > scrolling._codes[1].get_line_height() * 70 and scrolling._codes[1].text == source_before and scrolling._codes[1].get_caret_line() == caret_before)
+	check("clicking overview reveals end changes without moving caret or editing source", scrolling._panes[1].scroll_vertical > scrolling._codes[1].get_line_height() * 70 and scrolling._codes[1].get_source_text() == source_before and scrolling._codes[1].get_caret_line() == caret_before)
 	click.position.y = 1
 	scrolling._navigation_input(click, 1)
 	check("clicking overview returns to beginning changes", scrolling._panes[1].scroll_vertical == 0)
@@ -438,17 +522,18 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	check("editing immediately invalidates stale overview ranges", scrolling._regions.is_empty())
 	await get_tree().create_timer(0.45).timeout
 	check("overview recomputes after successive edits without saving when auto-save is off", not scrolling._regions.is_empty() and scrolling.is_dirty() and FileAccess.get_file_as_string("res://editable.txt") == source_before)
-	draft.undo()
+	draft.undo_source()
 	await get_tree().process_frame
 	scrolling._timer.stop()
 	scrolling._update_diff()
-	check("Undo restores source and rebuilds navigation without a write", draft.text == source_before and not scrolling.is_dirty() and not scrolling._regions.is_empty())
+	check("Undo restores source and rebuilds navigation without a write", draft.get_source_text() == source_before and not scrolling.is_dirty() and not scrolling._regions.is_empty())
 	Settings.set_value("auto_save_scripts", automatic)
 	if OS.get_cmdline_user_args().has("--gittydot-visual"):
 		scrolling._panes[1].scroll_horizontal = 0
 		scrolling._panes[1].scroll_vertical = scrolling._codes[1].get_line_height() * 37
 		for frame in 4:
 			await get_tree().process_frame
+		check("aligned panes retain the scrolled insertion viewport after deferred layout", scrolling._panes[1].scroll_vertical == scrolling._codes[1].get_line_height() * 37 and scrolling._panes[0].scroll_vertical == scrolling._panes[1].scroll_vertical)
 		RenderingServer.force_draw(false)
 		var capture := shell.get_viewport().get_texture().get_image().get_region(Rect2i(Vector2i(shell.global_position), Vector2i(shell.size)))
 		check("graphical editor captures the editable working-file panes", capture != null and not capture.is_empty() and capture.save_png("res://editable-working-diff.png") == OK)
@@ -494,7 +579,7 @@ func _check_editable_diff(repo: RefCounted) -> void:
 		viewport_image.get_region(Rect2i(Vector2i(shell.global_position), Vector2i(shell.size))).save_png("res://editable-working-replacement.png")
 	shell.queue_free()
 	await get_tree().process_frame
-	var original := right.text
+	var original: String = right.get_source_text()
 	if OS.get_cmdline_user_args().has("--gittydot-ui-only"):
 		return # Layout/navigation loop; saving, native scenes and scripts use the full suite.
 	var staged: PackedByteArray = repo.get_file_bytes(":", "editable.txt")
@@ -504,15 +589,15 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	await get_tree().create_timer(0.6).timeout
 	check("typing in the right pane automatically saves the working file", FileAccess.get_file_as_string("res://editable.txt").contains("edited in diff") and not view.is_dirty())
 	check("saving the editable comparison preserves partial staging", repo.get_file_bytes(":", "editable.txt") == staged and not staged.get_string_from_utf8().contains("edited in diff"))
-	check("refresh after editable save preserves caret and Undo", right.get_caret_line() == 2 and right.has_undo() and right.get_version() == right.get_saved_version())
-	right.undo()
+	check("refresh after editable save preserves caret and Undo", right.get_caret_line() == 2 and right._source.has_undo() and right.get_version() == right.get_saved_version())
+	right.undo_source()
 	await get_tree().create_timer(0.6).timeout
-	check("Undo in the editable pane saves the original working text", right.text == original and FileAccess.get_file_as_string("res://editable.txt") == original)
+	check("Undo in the editable pane saves the original working text", right.get_source_text() == original and FileAccess.get_file_as_string("res://editable.txt") == original)
 	# Staging must flush a keystroke without waiting for debounce.
 	right.insert_text_at_caret(" immediate stage")
 	_fork.dock_instance._changes_panel._set_staged(["editable.txt"], true)
 	check("staging immediately flushes the comparison buffer", repo.get_file_bytes(":", "editable.txt").get_string_from_utf8().contains("immediate stage") and not view.is_dirty())
-	right.undo()
+	right.undo_source()
 	view.flush()
 	repo.unstage_file("editable.txt")
 	screen._mode.select(2)
@@ -569,7 +654,7 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	var recovered := WorkingDiff.new()
 	recovery_shell.add_child(recovered)
 	recovered.show_file(screen.diff_view._context)
-	check("unsaved comparison drafts recover into a new editor session without automatic overwrite", recovered.is_dirty() and recovered._codes[1].text == right.text and FileAccess.get_file_as_bytes("res://editable_crlf.txt") == view._baseline)
+	check("unsaved comparison drafts recover into a new editor session without automatic overwrite", recovered.is_dirty() and recovered._codes[1].get_source_text() == right.get_source_text() and FileAccess.get_file_as_bytes("res://editable_crlf.txt") == view._baseline)
 	recovered.flush()
 	recovery_shell.queue_free()
 	await get_tree().process_frame
@@ -631,17 +716,17 @@ func _check_editable_diff(repo: RefCounted) -> void:
 			dialog.confirmed.emit()
 	check("Git operations are blocked while a comparison draft cannot be saved", not SaveGuard.flush_scripts() and SaveGuard.unsaved_files().has("res://tracked.gd"))
 	native.undo()
-	right.undo()
+	right.undo_source()
 	view.flush()
 	_fork.autosave.set_enabled(autosave_before)
 	check("undoing the conflicting draft clears its recovery record", not view.is_dirty() and not FileAccess.file_exists(view._recovery_path()))
 	right.insert_text_at_caret("# saved from comparison\n")
 	view.flush()
-	check("comparison save synchronizes a clean native script tab and its saved marker", native.text == right.text and native.get_version() == native.get_saved_version())
-	check("comparison save synchronizes the native script resource source", String(EditorInterface.get_script_editor().get_current_script().source_code).replace("\r\n", "\n") == right.text)
-	right.undo()
+	check("comparison save synchronizes a clean native script tab and its saved marker", native.text == right.get_source_text() and native.get_version() == native.get_saved_version())
+	check("comparison save synchronizes the native script resource source", String(EditorInterface.get_script_editor().get_current_script().source_code).replace("\r\n", "\n") == right.get_source_text())
+	right.undo_source()
 	view.flush()
-	check("comparison Undo also updates the clean native script tab", native.text == right.text and not native.text.contains("saved from comparison"))
+	check("comparison Undo also updates the clean native script tab", native.text == right.get_source_text() and not native.text.contains("saved from comparison"))
 	Settings.set_value("auto_save_scripts", false)
 	WorkingDiff.apply_auto_save_policy()
 	var before_manual := FileAccess.get_file_as_string("res://tracked.gd")
@@ -650,7 +735,7 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	check("the auto-save preference also pauses comparison writes", view.is_dirty() and FileAccess.get_file_as_string("res://tracked.gd") == before_manual and view._status.text.contains("Unsaved"))
 	view._on_input(key)
 	check("manual Save remains available with auto-save disabled", not view.is_dirty() and FileAccess.get_file_as_string("res://tracked.gd").contains("manual comparison save"))
-	right.undo()
+	right.undo_source()
 	view.flush()
 	# Explicit opening must flush edits even while automatic saving is disabled.
 	for script_path in ["tracked.gd", "new_file.gd", "created_after_import.gd"]:
@@ -666,8 +751,8 @@ func _check_editable_diff(repo: RefCounted) -> void:
 		screen._open_native()
 		await get_tree().process_frame
 		var opened: CodeEdit = EditorInterface.get_script_editor().get_current_editor().get_base_editor()
-		check("Open in Editor flushes manual comparison edits and opens updated source: " + script_path, not view.is_dirty() and opened.text == right.text and opened.text.contains("pending open") and Open.current_tab_path() == "res://" + script_path)
-		right.undo()
+		check("Open in Editor flushes manual comparison edits and opens updated source: " + script_path, not view.is_dirty() and opened.text == right.get_source_text() and opened.text.contains("pending open") and Open.current_tab_path() == "res://" + script_path)
+		right.undo_source()
 		view.flush()
 	check("missing files explain why Open in Editor is unavailable", not Open.unavailable_reason(repo.get_repo_root(), "deleted.txt").is_empty())
 	check("out-of-project files cannot be opened", not Open.unavailable_reason(repo.get_repo_root(), "../outside.gd").is_empty())

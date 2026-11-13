@@ -155,8 +155,9 @@ func _capture_geometry() -> void:
 			for rect: Rect2 in rects:
 				blocks.append({"rect": rect, "kind": span["kind"]})
 		next[line] = blocks
+	var view_changed := _view_signature != _signature()
 	_view_signature = _signature()
-	if next != geometry:
+	if next != geometry or view_changed:
 		geometry = next
 		code.queue_redraw.call_deferred() # Redraw requests inside draw itself are ignored.
 

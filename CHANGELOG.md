@@ -1,5 +1,13 @@
 # GittyDot changelog
 
+## Unreleased
+
+### Fixed
+
+- Align editable side-by-side comparisons with blank display rows opposite insertions, deletions and unequal replacements. Both panes now scroll through the same visual rows, while line numbers retain their original source positions.
+- Keep alignment gaps out of saved files, recovery drafts, clipboard selections and source Undo/Redo; preserve immediate saves before staging or switching files.
+- Redraw character highlights after comparison resizing even when glyph positions remain unchanged.
+
 ## 0.2.5 — 2026-10-23 — Compatability Update
 
 ### Added
