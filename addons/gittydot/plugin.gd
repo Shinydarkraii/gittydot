@@ -262,6 +262,7 @@ func _queue_poll() -> void:
 
 
 func _exit_tree() -> void:
+	EditorOpen.cancel_native_refreshes()
 	# Disconnect first: no callback may save/repaint while the controls are being destroyed.
 	EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_queue_poll)
 	resource_saved.disconnect(_on_resource_saved)

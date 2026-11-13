@@ -6,6 +6,7 @@ extends RefCounted
 
 ## Registered by the fork: unsupported text/configuration files open in the central diff screen.
 static var open_raw_file: Callable
+static var _native_refresh: RefCounted
 
 
 ## Enablement uses disk presence for scripts, including files not yet imported.
@@ -92,7 +93,6 @@ static func refresh_external_change(repo_root: String, path: String) -> void:
 ## refresh_external_change() for several repo-relative paths at once.
 static func refresh_external_changes(repo_root: String, paths: Array) -> void:
 	# Also covers a file revert_file() just deleted outright.
-	EditorInterface.get_resource_filesystem().scan()
 	var discarded := PackedStringArray()
 	for path: String in paths:
 		var res_path := ProjectSettings.localize_path(repo_root.path_join(path))
@@ -107,18 +107,89 @@ static func refresh_external_changes(repo_root: String, paths: Array) -> void:
 		if ResourceLoader.exists(res_path):
 			ResourceLoader.load(res_path, "", ResourceLoader.CACHE_MODE_REPLACE)
 	sync_open_scripts(discarded)
+	_queue_native_refresh(PackedStringArray())
 
 
 ## Same as refresh_external_change(), but for an operation that can touch
 ## the whole working tree (checkout_commit, reset_branch_to, ...) rather
 ## than one known path.
 static func refresh_all_external_changes() -> void:
-	EditorInterface.get_resource_filesystem().scan()
-	for scene_path in EditorInterface.get_open_scenes():
-		# Unsaved new scenes have no path, and a checkout may have deleted the file.
-		if not scene_path.is_empty() and FileAccess.file_exists(scene_path):
-			EditorInterface.reload_scene_from_path(scene_path)
 	sync_open_scripts()
+	_queue_native_refresh(EditorInterface.get_open_scenes())
+
+
+static func native_refresh_pending() -> bool:
+	return _native_refresh != null and _native_refresh.waiting
+
+
+static func cancel_native_refreshes() -> void:
+	if _native_refresh != null:
+		_native_refresh.cancel()
+
+
+static func _queue_native_refresh(scenes: PackedStringArray) -> void:
+	if _native_refresh == null:
+		_native_refresh = NativeRefresh.new()
+	_native_refresh.queue(scenes, unsaved_scenes)
+
+
+# Keep awaits on an instance: older Godot VMs can invalidate static coroutine
+# bytecode when a filesystem scan reloads script dependencies.
+class NativeRefresh:
+	extends RefCounted
+	var epoch := 0
+	var waiting := false
+	var scan_requested := false
+	var pending_scenes := {}
+
+	func cancel() -> void:
+		epoch += 1
+		waiting = false
+		scan_requested = false
+		pending_scenes.clear()
+
+	func queue(scenes: PackedStringArray, dirty_scenes: Callable) -> void:
+		for path in scenes:
+			if not path.is_empty():
+				pending_scenes[path] = true
+		scan_requested = true
+		if not waiting:
+			waiting = true
+			finish(epoch, dirty_scenes)
+
+	func finish(generation: int, dirty_scenes: Callable) -> void:
+		var tree := Engine.get_main_loop() as SceneTree
+		await tree.create_timer(0.1).timeout
+		while generation == epoch and (scan_requested or not pending_scenes.is_empty()):
+			scan_requested = false
+			var filesystem := EditorInterface.get_resource_filesystem()
+			while filesystem.is_scanning():
+				await tree.create_timer(0.05).timeout
+				if generation != epoch:
+					return
+			filesystem.scan()
+			while filesystem.is_scanning():
+				await tree.create_timer(0.05).timeout
+				if generation != epoch:
+					return
+			await tree.create_timer(0.1).timeout
+			if generation != epoch:
+				return
+			var paths := pending_scenes.keys()
+			pending_scenes.clear()
+			for path: String in paths:
+				# Native progress loops process timers recursively. Enter from a
+				# fresh frame, outside timer-list iteration and deferred flushing.
+				await tree.process_frame
+				if generation != epoch:
+					return
+				if path in EditorInterface.get_open_scenes() and FileAccess.file_exists(path) and not path in dirty_scenes.call():
+					EditorInterface.reload_scene_from_path(path)
+				await tree.create_timer(0.05).timeout
+				if generation != epoch:
+					return
+		if generation == epoch:
+			waiting = false
 
 
 ## Script and text file tabs keep their own buffer, so reloading the resource doesn't change what's shown; this rewrites each open tab whose file changed on disk (one undoable edit, caret and scroll kept, tab stays "saved"). Tabs with unsaved edits are left alone unless listed in discarded.

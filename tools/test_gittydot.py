@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import ssl
+import sys
 
 
 def main() -> None:
@@ -18,11 +20,27 @@ def main() -> None:
     parser.add_argument('--ui-only', action='store_true', help='Run the focused dock and editable comparison regressions')
     parser.add_argument('--editor-scale', type=float, default=1.0, choices=[1.0, 1.5, 2.0], help='Portable test editor display scale')
     parser.add_argument('--git', type=Path, help='Git executable for this test process and its disposable editor only')
+    trust = parser.add_mutually_exclusive_group()
+    trust.add_argument('--native-trust', action='store_true', help='Use native trust instead of auto-detecting a Git PEM')
+    trust.add_argument('--ca-bundle', type=Path, help='Trusted PEM bundle for the disposable project/editor; TLS verification remains enabled')
     args = parser.parse_args()
     if args.git:
         if not args.git.is_file():
             parser.error('--git must point to an existing executable')
         os.environ['PATH'] = str(args.git.resolve().parent) + os.pathsep + os.environ.get('PATH', '')
+    git_binary = args.git or Path(shutil.which('git') or 'git')
+    git_version = subprocess.run([str(git_binary), '--version'], check=True, capture_output=True, text=True).stdout.strip()
+    candidates = [git_binary.resolve().parents[1] / layout / 'etc/ssl/certs/ca-bundle.crt' for layout in ('mingw64', 'ucrt64', 'mingw32')]
+    candidate = args.ca_bundle or next((path for path in candidates if path.is_file()), None)
+    ca_bundle = candidate if candidate is not None and candidate.is_file() and not args.native_trust else None
+    if args.ca_bundle and ca_bundle is None:
+        parser.error('--ca-bundle must point to an existing trusted PEM file')
+    if ca_bundle is not None:
+        try:
+            ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cafile=str(ca_bundle))
+        except (OSError, ssl.SSLError) as error:
+            parser.error('Invalid CA bundle: ' + str(error))
+    print('TLS trust: ' + (str(ca_bundle) if ca_bundle else ('native system store (selected explicitly)' if args.native_trust else 'native system store (no Git-relative PEM found)')), flush=True)
     root = Path(__file__).resolve().parents[1]
     addon = root / 'addons/gittydot'
     work = root / f'{root.name}-temp-chatgpt' / 'gittydot'
@@ -46,13 +64,11 @@ renderer/rendering_method="gl_compatibility"
 ''', encoding='utf-8')
     # Some managed Windows hosts cannot enumerate the user's root store.
     # Use Git's existing trusted CA bundle in this disposable project only.
-    git_binary = args.git or Path(shutil.which('git') or 'git')
-    ca_bundle = git_binary.resolve().parents[1] / 'mingw64/etc/ssl/certs/ca-bundle.crt'
-    if ca_bundle.is_file():
+    if ca_bundle is not None:
         shutil.copyfile(ca_bundle, fixture / 'test-ca-bundle.crt')
         with (fixture / 'project.godot').open('a', encoding='utf-8') as config:
             config.write('\n[network]\ntls/certificate_bundle_override="res://test-ca-bundle.crt"\n')
-    (fixture / '.gitignore').write_text('.godot/\n*-temp-chatgpt/\n', encoding='utf-8')
+    (fixture / '.gitignore').write_text(f'.godot/\n/{fixture.name}-temp-chatgpt/amend*/\n/{fixture.name}-temp-chatgpt/.gdignore\n', encoding='utf-8')
 
     def git(*command: str) -> None:
         subprocess.run(['git', '-c', 'core.useBuiltinFSMonitor=false', '-c', 'core.fsmonitor=false', '-C', str(fixture), *command], check=True, capture_output=True, text=True)
@@ -162,8 +178,10 @@ renderer/rendering_method="gl_compatibility"
     settings = editor_data / f'editor_settings-{match.group(1)}.tres'
     config = settings.read_text(encoding='utf-8') if settings.exists() else '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n'
     overrides = {'interface/editor/appearance/display_scale': '7', 'interface/editor/appearance/custom_display_scale': str(args.editor_scale), 'network/connection/check_for_updates': '0'}
-    if ca_bundle.is_file():
+    if ca_bundle is not None:
         overrides['network/tls/editor_tls_certificates'] = json.dumps((fixture / 'test-ca-bundle.crt').as_posix())
+    if ca_bundle is None:
+        config = re.sub(r'^network/tls/editor_tls_certificates = .*\n?', '', config, flags=re.MULTILINE)
     for key, value in overrides.items():
         line = f'{key} = {value}'
         config = re.sub(r'^' + re.escape(key) + r' = .*$', line, config, flags=re.MULTILINE) if key + ' = ' in config else config + line + '\n'
@@ -182,28 +200,51 @@ renderer/rendering_method="gl_compatibility"
         if '--' not in command:
             command.append('--')
         command.append('--gittydot-ui-only')
-    run = subprocess.run(command, capture_output=True, text=True, timeout=90, startupinfo=startup)
+    metadata = {'godot_version': version, 'git_version': git_version, 'mode': 'graphical' if args.visual else 'headless', 'ca_bundle': str(ca_bundle) if ca_bundle else 'native', 'editor_scale': args.editor_scale, 'ui_only': args.ui_only, 'python_executable': sys.executable}
+    (fixture / 'run-metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
+    print(f"Profile: {version} / {git_version} / {metadata['mode']}", flush=True)
+    if ca_bundle is None:
+        probe = fixture / 'native-trust-probe'
+        probe.mkdir()
+        (probe / '.gdignore').write_text('', encoding='utf-8')
+        (probe / 'project.godot').write_text('config_version=5\n[application]\nconfig/name="Native trust prerequisite probe"\n[rendering]\nrenderer/rendering_method="gl_compatibility"\n', encoding='utf-8')
+        trust_run = subprocess.run([str(engine), '--headless', '--editor', '--path', str(probe), '--quit'], capture_output=True, text=True, timeout=30)
+        trust_output = trust_run.stdout + '\n' + trust_run.stderr
+        (fixture / 'native-trust-probe.log').write_text(trust_output, encoding='utf-8')
+        if 'Failed to read the root certificate store' in trust_output:
+            reason = 'Native TLS trust is unavailable. Supply an existing trusted PEM with --ca-bundle; TLS verification was not disabled.'
+            (fixture / 'integration-result.json').write_text(json.dumps({**metadata, 'checks': [{'name': 'editor integration suite', 'passed': None, 'skip_reason': reason}], 'passed': 0, 'failed': 0, 'skipped': 1, 'prerequisite_failure': reason}, indent=2), encoding='utf-8')
+            print('GittyDot: 0 passed, 0 failed, 1 skipped (prerequisite unavailable)', flush=True)
+            print('Report: ' + str(fixture / 'integration-result.json'), flush=True)
+            raise SystemExit('Prerequisite failure: ' + reason)
+        if trust_run.returncode or re.search(r'^(?:ERROR:|SCRIPT ERROR:)', trust_output, flags=re.MULTILINE):
+            raise SystemExit('Native trust preflight failed. Inspect ' + str(fixture / 'native-trust-probe.log'))
+    run = subprocess.run(command, capture_output=True, text=True, timeout=180, startupinfo=startup)
     report_path = fixture / 'integration-result.json'
     if not report_path.exists():
         print(run.stdout)
         print(run.stderr)
         raise SystemExit(f'Editor did not finish the checks. Inspect {log}')
     report = json.loads(report_path.read_text(encoding='utf-8'))
+    report.update(metadata)
+    report_path.write_text(json.dumps(report, indent=2), encoding='utf-8')
     output = log.read_text(encoding='utf-8')
     script_errors = re.findall(r'^.*(?:SCRIPT ERROR:|Parse Error:|Failed to load script).*$'
                                , output, flags=re.MULTILINE)
     startup_errors = re.findall(r'^.*(?:Unicode parsing error|Loaded resource as image file|Could not create child process).*$'
                                 , output, flags=re.MULTILINE)
     engine_errors = re.findall(r'^ERROR:.*$', output, flags=re.MULTILINE)
-    print(f"GittyDot: {report['passed']} passed, {report['failed']} failed; {len(script_errors)} script errors")
+    print(f"GittyDot: {report['passed']} passed, {report['failed']} failed, {report.get('skipped', 0)} skipped; {len(script_errors)} script errors")
     print(f'Startup diagnostics: {len(startup_errors)}')
     print(f'Engine errors: {len(engine_errors)}')
     print(f'Report: {report_path}')
     if args.visual:
-        print(f'Native preview: {fixture / "inline-highlights.png"}')
+        print(f'Native preview: {fixture.parent / (fixture.name + "-artifacts-temp-chatgpt") / "inline-highlights.png"}')
     for entry in report['checks']:
-        if not entry['passed']:
+        if entry['passed'] is False:
             print('FAIL:', entry['name'])
+        elif entry['passed'] is None:
+            print('SKIP:', entry['name'], '-', entry['skip_reason'])
     for error in script_errors:
         print(error)
     for error in startup_errors:

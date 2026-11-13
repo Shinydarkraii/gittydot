@@ -138,12 +138,21 @@ func _on_open_on_web(target: Variant) -> void:
 	if code_edit == null:
 		return
 	var resolved: Dictionary = diff_gutter.resolve_repo(code_edit.get_meta(diff_gutter.META_RES_PATH, ""))
-	var repo: RefCounted = resolved["repo"]
+	if resolved.is_empty() or not FileAccess.file_exists(code_edit.get_meta(diff_gutter.META_RES_PATH, "")):
+		return
+	var repo := preload("res://addons/gittydot/util/git_cli_repo.gd").new()
+	if not repo.open(ProjectSettings.globalize_path(code_edit.get_meta(diff_gutter.META_RES_PATH, "")).get_base_dir()) or repo.get_repo_root() != resolved["repo"].get_repo_root():
+		return
+	var site := WebLinks.site(repo)
+	if site.is_empty():
+		return
 	var ref := WebLinks.pushed_base(repo)
 	if ref.is_empty():
 		EditorInterface.get_editor_toaster().push_toast("Git: this branch isn't pushed yet, so there's nothing to open.")
 		return
-	OS.shell_open(WebLinks.file_url(WebLinks.site(repo), ref, resolved["rel_path"], code_edit.get_caret_line() + 1))
+	var url := WebLinks.file_url(site, ref, resolved["rel_path"], code_edit.get_caret_line() + 1)
+	if url.begins_with("https://") or url.begins_with("http://"):
+		OS.shell_open(url)
 
 
 func _on_toggle_blame(_target: Variant) -> void:

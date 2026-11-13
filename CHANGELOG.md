@@ -1,12 +1,40 @@
 # GittyDot changelog
 
-## Unreleased
+## 0.2.6 — 2026-11-14 — Correctness and Responsiveness Update
 
 ### Fixed
 
 - Align editable side-by-side comparisons with blank display rows opposite insertions, deletions and unequal replacements. Both panes now scroll through the same visual rows, while line numbers retain their original source positions.
 - Keep alignment gaps out of saved files, recovery drafts, clipboard selections and source Undo/Redo; preserve immediate saves before staging or switching files.
 - Redraw character highlights after comparison resizing even when glyph positions remain unchanged.
+
+- Failed staging no longer falls back to removing a file from the index. Failed unstaging on an established branch preserves the index; only a genuinely unborn branch uses cached removal. Checkbox, grouped, automatic and changelist operations report errors and refresh from the actual index.
+- Establish an exact local scratch exclusion in existing repositories and linked worktrees, without editing tracked ignore files or automatically untracking existing scratch files. Refuse scratch storage when it cannot be safely excluded.
+- Disconnect FileSystem collapse callbacks and suppress queued painting after teardown. Guard stale web-menu targets after file/repository changes. Release modal dialogs before awaited editor refresh actions resume.
+- Serialize post-operation filesystem scans and scene reloads; preserve scenes that acquire unsaved edits while a refresh is pending, and cancel queued refreshes when the addon is disabled.
+- Validate Unix descendant-query failures and PIDs before best-effort cancellation, and use a coarser process-completion wait while draining both pipes concurrently.
+- Correct the GittyDot authentication hint and repository initialization description. Remove unused combined-dock code and obsolete detach/reattach helpers, while preserving upstream attribution, source identities and authored scenes.
+
+### Performance
+
+- Discover known native script tabs without repeated full-file reads; keep full content/conflict checks immediately before writing, including same-size, same-timestamp external edits.
+- Compute changed-buffer gutter baselines and diffs on a bounded, coalescing background worker. Cache immutable HEAD blobs, reject stale file/buffer/HEAD results, defer hidden native tabs during scene workflows, retry failures, and cancel/join work on disable.
+
+### Test tooling
+
+- Add explicit trusted `--ca-bundle` and `--native-trust` options, validate PEM input before fixture setup, support both MinGW and UCRT Git bundle layouts, and retain TLS verification.
+- Report exact Godot/Git versions, execution mode, trust source and skipped blocks with reasons. Graphical, headless and older-Git profiles have different assertion totals; 0.2.5's historical 282-check total was graphical with Git 2.53.0.
+
+### Compatibility and limits
+
+- Retains Godot 4.4+ as the minimum and includes the aligned comparison fix. Native Linux/macOS process-tree cleanup remains unverified; Windows tests cover injected Unix discovery failures and real cancellation with inherited helper pipes.
+- Comparison panes use one caret and copy/paste for moving text; the native editor retains multi-caret and drag editing.
+
+### Verification
+
+- Windows graphical matrix: **355 passed / 1 skipped** per build on Godot **4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1**, using **Git 2.56.0**, with zero failures, script errors, startup diagnostics or engine errors in the final runs.
+- Git 2.56.0 headless: **344 passed / 2 skipped**. Git 2.36.1 with an explicit trusted PEM: **339 passed / 2 skipped** graphical and **328 passed / 3 skipped** headless, with zero diagnostics. Skips identify graphical-only checks, native Unix cancellation and unsupported older-Git selected-history execution as applicable.
+- Native TLS trust is unavailable on this test host; preflight reports the prerequisite instead of disabling verification. Supplied PEMs are validated before fixture setup. The currently available modern Git is 2.56.0; the historical 2.53.0 executable was not installed or rerun.
 
 ## 0.2.5 — 2026-10-23 — Compatability Update
 

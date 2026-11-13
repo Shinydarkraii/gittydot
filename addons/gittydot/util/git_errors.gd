@@ -47,7 +47,7 @@ static func explain(text: String) -> String:
 		HOST_KEY:
 			hint = "SSH doesn't know this host yet. Connect once from a terminal (e.g. `ssh -T git@host`) to accept its key."
 		AUTH:
-			hint = "Authentication failed. Godit can't answer password prompts — set up an SSH agent or a credential helper, then retry."
+			hint = "Authentication failed. GittyDot can't answer password prompts — set up an SSH agent or a credential helper, then retry."
 		CONFLICT:
 			hint = "There are conflicts. Resolve them in the Changes panel, then Continue (or Abort)."
 		DIRTY:

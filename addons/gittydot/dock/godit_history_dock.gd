@@ -58,22 +58,6 @@ func _add_console_tab() -> void:
 	_console = console
 
 
-## Pulls Log and Console out of the tab bar for the combined dock ({} without a repo: nothing to show there).
-func detach_panels() -> Dictionary:
-	if _tabs == null:
-		return {}
-	_tabs.remove_child(_history_panel)
-	_tabs.remove_child(_console)
-	return {"history": _history_panel, "console": _console}
-
-
-## Reverses detach_panels(); the combined dock has already let go of them.
-func reattach_panels() -> void:
-	if _tabs != null:
-		_tabs.add_child(_history_panel)
-		_tabs.add_child(_console)
-
-
 ## Brings the Log tab to front with oid selected.
 func show_commit(oid: String) -> void:
 	if _repo == null:

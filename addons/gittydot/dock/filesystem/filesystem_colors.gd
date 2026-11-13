@@ -31,9 +31,11 @@ var status_by_path := {}
 var _signature := ""
 ## The FileSystem dock rebuilds its whole Tree on rescans and searches; a new root item means the colors are gone.
 var _painted_root: TreeItem
+var _stopped := false
 
 
 func _ready() -> void:
+	_stopped = false
 	repo = RepoOpener.open_current_project_repo()["repo"]
 	if repo == null:
 		return
@@ -43,7 +45,7 @@ func _ready() -> void:
 		return
 	_tree = trees[0]
 	_tree.draw.connect(_on_tree_draw)
-	_tree.item_collapsed.connect(func(_item: TreeItem) -> void: _paint.call_deferred())
+	_tree.item_collapsed.connect(_on_item_collapsed)
 	var lists := dock.find_children("*", "ItemList", true, false)
 	if not lists.is_empty():
 		_list = lists[0]
@@ -56,11 +58,21 @@ func _exit_tree() -> void:
 	_colors = {}
 	_badges = {}
 	if _tree != null and is_instance_valid(_tree):
-		_tree.draw.disconnect(_on_tree_draw)
+		if _tree.draw.is_connected(_on_tree_draw):
+			_tree.draw.disconnect(_on_tree_draw)
+		if _tree.item_collapsed.is_connected(_on_item_collapsed):
+			_tree.item_collapsed.disconnect(_on_item_collapsed)
 		_paint()
 	if _list != null and is_instance_valid(_list):
-		_list.draw.disconnect(_queue_list_paint)
+		if _list.draw.is_connected(_queue_list_paint):
+			_list.draw.disconnect(_queue_list_paint)
 		_paint_list()
+	_stopped = true
+
+
+func _on_item_collapsed(_item: TreeItem) -> void:
+	if not _stopped:
+		_paint.call_deferred()
 
 
 func _on_polled(snapshot: Dictionary) -> void:
@@ -122,7 +134,7 @@ func _on_tree_draw() -> void:
 
 ## Applies _colors to every row, restoring rows that were colored before but aren't changed any more.
 func _paint() -> void:
-	if _tree == null or not is_instance_valid(_tree) or _tree.get_root() == null:
+	if _stopped or _tree == null or not is_instance_valid(_tree) or _tree.get_root() == null:
 		return
 	_painted_root = _tree.get_root()
 	_queue_list_paint()
@@ -160,17 +172,19 @@ func _paint() -> void:
 
 ## The list is refilled on every folder change and has no per-item slot to mark, so each redraw re-checks its (one folder's worth of) items.
 func _queue_list_paint() -> void:
-	if _list_paint_queued or _list == null or not _list.is_visible_in_tree():
+	if _stopped or _list_paint_queued or _list == null or not _list.is_visible_in_tree():
 		return
 	_list_paint_queued = true
-	(func() -> void:
-		_list_paint_queued = false
-		_paint_list()
-	).call_deferred()
+	_flush_list_paint.call_deferred()
+
+
+func _flush_list_paint() -> void:
+	_list_paint_queued = false
+	_paint_list()
 
 
 func _paint_list() -> void:
-	if _list == null or not is_instance_valid(_list):
+	if _stopped or _list == null or not is_instance_valid(_list):
 		return
 	for i in _list.item_count:
 		var path: Variant = _list.get_item_metadata(i)

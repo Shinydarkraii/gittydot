@@ -1,6 +1,6 @@
 # Maintaining GittyDot
 
-GittyDot 0.2.5 (Compatability Update) is a fork of the Godit 1.1.1 package, verified on Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1 on Windows. The original MIT license and author attribution remain in LICENSE. UPSTREAM_README.md preserves the upstream instructions. upstream.json records the source package's checksums before customization.
+GittyDot 0.2.6 (Correctness and Responsiveness Update) is a fork of the Godit 1.1.1 package, verified on Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1 on Windows. The original MIT license and author attribution remain in LICENSE. UPSTREAM_README.md preserves the upstream instructions. upstream.json records the source package's checksums before customization.
 
 ## Source boundaries
 
@@ -92,3 +92,19 @@ On older CodeEdits, use shaped line widths, gutter widths, font line height and 
 `working_diff.gd` builds shared visual rows from zero-context Git regions, padding the shorter side of each changed block. `aligned_code_edit.gd` projects those rows while a hidden source CodeEdit owns canonical text and native Undo. Saving, recovery and diff calculation must use `get_source_text()`, which consumes deferred edits before immediate Save/Stage/file-switch actions. Never save the projected `.text`. Copy/cut selections map to source offsets; selection indentation runs on source. Comparison panes intentionally use one caret and disable selection dragging to avoid disjoint native edits across padding. Keep the native Script editor untouched.
 
 Line numbers and syntax/change highlights map source lines onto display rows; both outer ScrollContainers use equal vertical offsets. Preserve empty-file and trailing-newline distinctions. Regression checks cover insertions, deletions, unequal replacements, empty documents, EOF gaps, selection paste/copy, typing, indentation, deletion across gaps, Undo/Redo, immediate saves, recovery and both supported content-sizing paths. In InlineHighlights, a changed view signature needs a redraw even if captured glyph rectangles are unchanged.
+
+## 0.2.6 safety and performance contracts
+
+Use result dictionaries for UI staging/unstaging and retain boolean single-file wrappers for callers. Never translate a failed `add` into cached removal. Only symbolic, missing branch refs establish an unborn HEAD. Changelist metadata must describe operations that actually succeeded; on partial failure refresh the index, report the error and avoid automatic rollback.
+
+`scratch_space.gd` resolves `info/exclude` and the index through Git, handles linked worktrees and escapes literal directory patterns. Preserve comments/bytes and refuse already-tracked or ineffective/unwritable exclusions. Cached checks are invalidated by index metadata or ignore-file contents. Every scratch caller must handle an empty directory result; never join a relative filename onto it.
+
+Autosave discovery attaches new tabs once and rebaselines clean native buffers without repeated disk reads. `flush_pending()` still reads content and checks existence/baseline immediately before native saving; timestamps are never the conflict authority. Native saved markers, Undo and externally dirty drafts remain authoritative.
+
+`buffer_diff_worker.gd` owns one cancellable job and a queue of at most 32 latest-per-tab snapshots. Its worker-only cache holds at most 64 immutable root/OID/path blobs; missing/ignored interpretations are not cached permanently. Pass immutable strings/OIDs/scratch paths to workers, and keep editor nodes, WeakRefs and painting on the main thread. Publish successful signatures only after validating buffer generation, resource path, repository and current HEAD. Clear signatures when edits invalidate flags. Defer requests/results for hidden native script tabs; refresh them when visible, keeping gutter updates outside native scene-load UI. Disable joins active work and clears pending requests before removing gutters.
+
+`GitCli.Job` registers/cancels PIDs under a mutex and drains stdout/stderr concurrently. Completion polling uses 5 ms waits. Unix descendant discovery validates exit status, output, positive PIDs and duplicates; parent cancellation remains best effort when discovery fails. Windows tests do not establish native Unix helper cleanup.
+
+Post-operation filesystem scans and scene reloads are serialized by the instance coordinator in `editor_open.gd`. Recheck dirty scenes immediately before reloading, cancel pending work on disable, and keep modal creation and gutter application outside pending native refreshes. Tests must await completion before starting another modal workflow. Avoid suspended static functions on older Godot VMs.
+
+Use `--git` to select an existing Git executable and `--ca-bundle` to select an independently trusted PEM, or `--native-trust` to exercise the system store. The runner validates supplied PEMs before starting the suite, preserves TLS checks, and reports versions/mode/trust/skips. Do not suppress generic TLS or engine diagnostics or promise identical assertion counts across capabilities. Benchmark counters record actual idle reads, launched diffs, fetched baselines and worker time; they are not universal speedup claims.

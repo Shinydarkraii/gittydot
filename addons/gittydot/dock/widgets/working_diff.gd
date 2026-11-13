@@ -306,7 +306,10 @@ func flush() -> bool:
 	if disk != _baseline and disk != bytes:
 		return _blocked("The file changed on disk. Your draft is kept; use Reload to discard it and load the disk version.")
 	if disk != bytes:
-		var temporary: String = _repo._temp_dir().path_join("working-save-%d.tmp" % get_instance_id())
+		var directory: String = _repo._temp_dir()
+		if directory.is_empty():
+			return _blocked("Couldn't establish an excluded scratch directory; see Console details.")
+		var temporary: String = directory.path_join("working-save-%d.tmp" % get_instance_id())
 		var file := FileAccess.open(temporary, FileAccess.WRITE)
 		if file == null:
 			return _blocked("Couldn't create the temporary file for saving.")
@@ -606,22 +609,27 @@ func _notification(what: int) -> void:
 
 
 func _recovery_path() -> String:
-	return _repo._temp_dir().path_join("working-draft-" + _absolute_path.sha256_text() + ".json")
+	var directory: String = _repo._temp_dir()
+	return "" if directory.is_empty() else directory.path_join("working-draft-" + _absolute_path.sha256_text() + ".json")
 
 
 func _save_recovery() -> void:
 	if not is_dirty():
 		return
-	var file := FileAccess.open(_recovery_path(), FileAccess.WRITE)
+	var path := _recovery_path()
+	if path.is_empty():
+		return
+	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify({"path": _absolute_path, "baseline": Marshalls.raw_to_base64(_baseline), "text": _codes[1].get_source_text()}))
 		file.close()
 
 
 func _restore_draft() -> void:
-	if not FileAccess.file_exists(_recovery_path()):
+	var path := _recovery_path()
+	if path.is_empty() or not FileAccess.file_exists(path):
 		return
-	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(_recovery_path()))
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
 	if data is Dictionary and data.get("path", "") == _absolute_path and data.get("text", null) is String:
 		_adopt_baseline(Marshalls.base64_to_raw(data.get("baseline", "")))
 		_codes[1].set_source_text(data["text"])
@@ -629,8 +637,9 @@ func _restore_draft() -> void:
 
 
 func _clear_recovery() -> void:
-	if FileAccess.file_exists(_recovery_path()):
-		DirAccess.remove_absolute(_recovery_path())
+	var path := _recovery_path()
+	if not path.is_empty() and FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
 
 
 func _exit_tree() -> void:

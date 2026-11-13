@@ -476,15 +476,30 @@ func _set_staged(paths: Array, stage: bool) -> void:
 		_show_error("Auto-save paused", "Resolve the externally changed script before changing staging.")
 		return
 	var new_files: Array = []
+	var tracked: Array = []
 	for path in _with_companions(paths):
-		if not stage:
-			_repo.unstage_file(path)
-		elif GitStatusFlags.is_untracked(_known_status.get(path, 0)) and not _changelist_state["assignments"].has(path):
+		if stage and GitStatusFlags.is_untracked(_known_status.get(path, 0)) and not _changelist_state["assignments"].has(path):
 			new_files.append(path)
 		else:
-			_repo.stage_file(path)
+			tracked.append(path)
+	if not _stage_paths(tracked, stage):
+		return
 	if not new_files.is_empty():
 		_add_to_vcs(new_files, _changelist_for_path(paths[0]))
+
+
+func _stage_paths(paths: Array, stage: bool) -> bool:
+	if paths.is_empty():
+		return true
+	if not SaveGuard.flush_scripts():
+		_show_error("Save paused", "Resolve unsaved or externally changed drafts before changing staging.")
+		return false
+	var result: Dictionary = _repo.stage_files(paths) if stage else _repo.unstage_files(paths)
+	if not result["ok"]:
+		_show_error("Stage failed" if stage else "Unstage failed", result["error"] + "\n\nGit may have completed some paths. Checkboxes will refresh from the actual index; no automatic rollback was attempted.")
+		refresh.call_deferred()
+		return false
+	return true
 
 
 ## Stages changes that appeared since the last refresh in the active changelist and adds new files not matching the auto-add masks; returns fresh status if it touched anything.
@@ -524,7 +539,8 @@ func _auto_track(entries: Array) -> Array:
 		_save_changelist_state()
 	if to_stage.is_empty() and to_add.is_empty():
 		return entries
-	_repo.stage_files(to_stage)
+	if not _stage_paths(to_stage, true):
+		return _repo.get_status()
 	if not to_add.is_empty():
 		_add_to_vcs(to_add)
 	var fresh: Array = _repo.get_status()
@@ -873,7 +889,8 @@ func _add_to_vcs(paths: Array, list_name := "") -> void:
 		list_name = _changelist_state["active"]
 	var result: Dictionary = _repo.stage_files(paths)
 	if not result["ok"]:
-		Dialogs.error(self, "Add to Git failed", result["error"])
+		_show_error("Add to Git failed", result["error"] + "\nThe index will be refreshed; no changelist assignments were changed.")
+		refresh.call_deferred()
 		return
 	for path in paths:
 		_changelist_state["assignments"][path] = list_name
@@ -884,9 +901,9 @@ func _add_to_vcs(paths: Array, list_name := "") -> void:
 ## Stages files in the active changelist, unstages tracked files outside
 ## it. Called whenever the active changelist changes, so Commit defaults
 ## to exactly that group unless the user hand-adjusts checkboxes after.
-func _sync_staging_to_active_changelist(readd_new := false) -> void:
+func _sync_staging_to_active_changelist(readd_new := false) -> bool:
 	if _repo == null or not Settings.get_value(AUTO_STAGE_SETTING_KEY, false):
-		return
+		return true
 	var active: String = _changelist_state["active"]
 	var to_stage: Array = []
 	for entry in _repo.get_status():
@@ -904,8 +921,9 @@ func _sync_staging_to_active_changelist(readd_new := false) -> void:
 		if belongs and (GitStatusFlags.is_unstaged(status) or not GitStatusFlags.is_staged(status)):
 			to_stage.append(path)
 		elif not belongs and GitStatusFlags.is_staged(status):
-			_repo.unstage_file(path)
-	_repo.stage_files(to_stage)
+			if not _stage_paths([path], false):
+				return false
+	return _stage_paths(to_stage, true)
 
 
 func _update_changelist_option(counts: Dictionary = {}) -> void:
@@ -1019,11 +1037,8 @@ func _on_changes_tree_item_edited() -> void:
 		var checked := item.is_checked(CHECKBOX_COLUMN)
 		var paths: Array = []
 		_collect_file_paths(item, paths)
-		for path in paths:
-			if checked:
-				_repo.stage_file(path)
-			else:
-				_repo.unstage_file(path)
+		if not _stage_paths(paths, checked):
+			return
 		# Folders/group of new files: checking adds them all in one go; unchecking has nothing to undo.
 		var new_paths: Array = []
 		_collect_file_paths(item, new_paths, "untracked_file")
@@ -1649,8 +1664,13 @@ func _set_active_changelist(name: String) -> void:
 		_update_amend_label()
 		_commit_message.text = messages.get(name, "")
 		_update_commit_buttons_enabled()
+	var previous: String = _changelist_state["active"]
 	_changelist_state["active"] = name
-	_sync_staging_to_active_changelist(true)
+	if not _sync_staging_to_active_changelist(true):
+		_changelist_state["active"] = previous
+		_commit_message.text = draft
+		refresh.call_deferred()
+		return
 	_save_changelist_state()
 	refresh.call_deferred()
 
@@ -1661,11 +1681,15 @@ func _move_files_to_changelist(paths: Array, name: String) -> void:
 	var active: String = _changelist_state["active"]
 	for path in paths:
 		var was_active := _changelist_for_path(path) == active
-		_changelist_state["assignments"][path] = name
 		if name == active and not was_active:
-			_repo.stage_file(path)
+			if not _stage_paths([path], true):
+				_save_changelist_state()
+				return
 		elif name != active and was_active:
-			_repo.unstage_file(path)
+			if not _stage_paths([path], false):
+				_save_changelist_state()
+				return
+		_changelist_state["assignments"][path] = name
 	_save_changelist_state()
 	_notify("Moved %s to \"%s\"." % [paths[0].get_file() if paths.size() == 1 else "%d files" % paths.size(), name])
 	refresh.call_deferred()
@@ -1864,7 +1888,8 @@ func _check_large_files() -> bool:
 				return false
 		"ignore":
 			for path in paths:
-				_repo.unstage_file(path)
+				if not _stage_paths([path], false):
+					return false
 				_ignore_path(path)
 		"commit":
 			pass

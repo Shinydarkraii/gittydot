@@ -129,18 +129,3 @@ func ignore_paths(paths: Array) -> void:
 func revert_paths(paths: Array) -> void:
 	if await SaveGuard.ensure_saved(_changes_panel, "Revert"):
 		await _changes_panel._revert_paths(paths)
-
-
-## Pulls Changes and Branches out of the tab bar together, so plugin.gd can dock both at the bottom instead.
-func detach_panels() -> Dictionary:
-	_tab_container.remove_child(_changes_panel)
-	_tab_container.remove_child(_branches_panel)
-	return {"changes": _changes_panel, "branches": _branches_panel}
-
-
-## Reverses detach_panels() when the toggle is switched back off.
-func reattach_panels(panels: Dictionary) -> void:
-	_changes_panel = panels["changes"]
-	_branches_panel = panels["branches"]
-	_tab_container.add_child(_changes_panel)
-	_tab_container.add_child(_branches_panel)

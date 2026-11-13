@@ -3,6 +3,7 @@
 extends RefCounted
 const UiScale := preload("res://addons/gittydot/util/ui_scale.gd")
 const GitCli := preload("res://addons/gittydot/util/git_cli.gd")
+const EditorOpen := preload("res://addons/gittydot/util/editor_open.gd")
 
 ## Bound by plugin.gd; cleared on disable so dialogs cannot call freed docks.
 static var reveal_console := Callable()
@@ -160,6 +161,13 @@ static func form(parent: Node, title: String, fields: Array, ok_text: String = "
 
 ## Pops the dialog up and waits for an answer: true (OK), false (cancel/close), or the custom action's String id.
 static func _run(parent: Node, dialog: AcceptDialog) -> Variant:
+	# Scene reload progress pumps editor events; don't open another modal from
+	# those callbacks until the queued native refresh has fully unwound.
+	while EditorOpen.native_refresh_pending():
+		await parent.get_tree().create_timer(0.05).timeout
+		if not is_instance_valid(parent):
+			dialog.free()
+			return false
 	var waiter := _Waiter.new()
 	dialog.confirmed.connect(waiter.finish.bind(true))
 	dialog.canceled.connect(waiter.finish.bind(false))
@@ -170,6 +178,9 @@ static func _run(parent: Node, dialog: AcceptDialog) -> Variant:
 	parent.add_child(dialog)
 	dialog.popup_centered(UiScale.size_i(TEXT_WIDTH + 40, 0))
 	var answer: Variant = await waiter.done
+	# Release the modal/exclusive window before the awaiting caller starts
+	# another editor progress operation (reload, checkout, commit refresh...).
+	dialog.hide()
 	dialog.queue_free()
 	return answer
 

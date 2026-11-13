@@ -7,7 +7,7 @@
 <p align="center"><strong>Review changes, edit diffs, and commit without leaving Godot.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.5-589eff" alt="Version 0.2.5">
+  <img src="https://img.shields.io/badge/version-0.2.6-589eff" alt="Version 0.2.6">
   <img src="https://img.shields.io/badge/Godot-4.4%2B%20%7C%204.8%20beta1-478cbf" alt="Godot 4.4+; tested through 4.8 beta1">
   <img src="https://img.shields.io/badge/platform-verified%20on%20Windows-626b78" alt="Verified on Windows">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f47c76" alt="MIT license"></a>
@@ -28,7 +28,7 @@ GittyDot brings an IntelliJ-inspired Git workflow to the Godot editor: a focused
 It is a fork of [Godit](https://github.com/rychtar/godit) 1.1.1, retaining its Git CLI backend and extending its editor integration. GittyDot runs your installed `git` from GDScript; it does not need the Godot Git GDExtension or a separate Version Control plugin.
 
 > [!IMPORTANT]
-> **0.2.5 — Compatability Update.** Verified on Windows with **Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1**. Requires **Godot 4.4 or newer**; Godot 4.0–4.3 were assessed and remain unsupported because required editor APIs are absent. Other operating systems and unlisted builds remain unverified.
+> **0.2.6 — Correctness and Responsiveness Update.** Verified on Windows with **Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1**. Requires **Godot 4.4 or newer**; Godot 4.0–4.3 were assessed and remain unsupported because required editor APIs are absent. Other operating systems and unlisted builds remain unverified.
 
 <a id="features"></a>
 
@@ -147,18 +147,22 @@ Git hooks and helpers run with your permissions. GittyDot does not sandbox repos
 
 ## 🧪 Testing
 
-The latest graphical verification on **2026-10-23** passed **282 editor integration checks on each of Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1**, with **0 failures, 0 script errors, 0 engine errors**, and no reported startup diagnostics in the final runs. It ran on **Windows / Git 2.53.0**. The earlier Git 2.36.1 compatibility result is historical; it has not been rerun for 0.2.5.
+The final graphical verification on **2026-11-14** passed **355 editor integration checks per build** on **Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1**, using **Windows / Git 2.56.0**. Each run had **0 failures, script errors, startup diagnostics or engine errors** and **1 explicit skip** for native Unix cancellation. Git 2.56.0 headless passed **344 checks / 2 skips**. With an explicit trusted PEM, Git 2.36.1 passed **339 graphical checks / 2 skips** and **328 headless checks / 3 skips**; its unsupported selected-history execution is skipped while its compatibility rejection is verified. Native system trust is unavailable on this host and is reported as a prerequisite failure before the full suite; TLS verification remains enabled.
 
-The checks exercise real editor saves and Undo, partial staging, editable comparisons, recovery, historical diffs, selected-commit amendments, console diagnostics, file/folder actions, gutter geometry, and split-pane scrolling. Separate first-install and restart checks verified initialization with GitHub CLI absent.
+The historical **282-check** total for 0.2.5 was the graphical Windows profile with Git 2.53.0. The current cached Git is 2.56.0; 2.53.0 was not rerun or installed for 0.2.6. Assertion totals vary with rendered and Git-version capabilities.
+
+The checks exercise real editor saves and Undo, partial staging, editable comparisons, recovery, historical diffs, selected-commit amendments, console diagnostics, file/folder actions, gutter geometry, and split-pane scrolling. Separate packaged startup/restart checks cover projects with and without a Git repository.
 
 From the **standalone source repository**, with Python 3, Git, and Godot installed:
 
 ```powershell
 python tools/test_gittydot.py --godot 'C:\Tools\Godot\Godot.exe'
 python tools/test_gittydot.py --godot 'C:\Tools\Godot\Godot.exe' --visual
+python tools/test_gittydot.py --godot 'C:\Tools\Godot\Godot.exe' --git 'C:\Tools\Git\cmd\git.exe' --ca-bundle 'C:\Trusted\ca-bundle.pem' --visual
+python tools/test_gittydot.py --godot 'C:\Tools\Godot\Godot.exe' --native-trust
 ```
 
-Replace the Godot path with your installation. Test fixtures stay inside the repository's temporary folder and do not stage or commit the source repository. These checks do not establish cross-platform support, all remote authentication setups, every inherited operation.
+Replace the paths with your installations and an existing trusted PEM. Without an override, the runner uses a bundled Git PEM when present, otherwise native trust; invalid PEMs fail before fixture setup. It never installs Git or disables TLS verification. Test fixtures stay inside the repository's temporary folder and do not stage or commit the source repository. These checks do not establish cross-platform support, all remote authentication setups, every inherited operation.
 
 <a id="feedback"></a>
 

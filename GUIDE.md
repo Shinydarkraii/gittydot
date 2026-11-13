@@ -1,6 +1,6 @@
 # GittyDot usage guide
 
-Detailed workflow instructions for **GittyDot 0.2.5 — Compatability Update**. Start with the [README](README.md) for installation, requirements, features, and known limitations.
+Detailed workflow instructions for **GittyDot 0.2.6 — Correctness and Responsiveness Update**. Start with the [README](README.md) for installation, requirements, features, and known limitations.
 
 ## Workflow
 
@@ -74,3 +74,9 @@ GittyDot passes `core.useBuiltinFSMonitor=false` to Windows Git children so the 
 ### Updating Godot
 
 This release requires Godot 4.4+. The Windows editor checks cover Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1. Godot 4.0–4.3 are unsupported. Replace the full addon and restart Godot after updating it; open comparisons retain their highlighting, overview navigation and save registration when Godot reparents editor UI. Other prerelease builds remain unverified.
+
+### Local scratch storage and staging failures
+
+GittyDot keeps temporary comparisons, patches and recovery drafts in its project-local scratch directory. It establishes a local Git exclusion through the repository's resolved `info/exclude`, including linked worktrees. It preserves existing rules and tracked `.gitignore` files. If scratch files are already tracked, or an exclusion cannot be written or is overridden, the operation pauses with Console details. Review those files yourself; GittyDot never silently untracks or deletes them.
+
+A failed stage remains a failure. GittyDot refreshes checkboxes from the index and reports the error; a multi-file command may have completed some paths. No destructive rollback is attempted. Failed changelist moves do not claim that unsuccessful paths moved.

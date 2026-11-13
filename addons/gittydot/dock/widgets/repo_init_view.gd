@@ -33,7 +33,7 @@ func _init(message: String) -> void:
 func _on_init_pressed() -> void:
 	var root := ProjectSettings.globalize_path("res://").trim_suffix("/")
 	var fields: Array = [
-		{ "type": "label", "label": "Creates a git repository in %s, with Godot's .gitignore (.godot/, /android/) and .gitattributes (LF line endings)." % root },
+		{ "type": "label", "label": "Creates a git repository in %s, with .gitignore (%s) and .gitattributes (LF line endings)." % [root, ", ".join(RepoSetup.GITIGNORE_LINES)] },
 		{ "key": "commit", "label": "Commit the project as it is now (\"Initial commit\")", "type": "check", "default": true },
 	]
 	if not RepoSetup.has_identity(root):

@@ -56,8 +56,11 @@ func _run() -> void:
 	var repo: RefCounted = _fork.dock_instance._repo
 	check("Commit and Branches initialize their runtime controls", is_instance_valid(_fork.dock_instance._changes_panel._sync_bar) and is_instance_valid(_fork.dock_instance._branches_panel._sync_bar))
 	check("Git Log initializes its runtime toolbar", is_instance_valid(_fork.history_dock_instance._history_panel._branch_option) and is_instance_valid(_fork.history_dock_instance._history_panel._undo_button))
+	if not OS.get_cmdline_user_args().has("--gittydot-visual"):
+		skip("graphical capture and pixel checks", "Headless profile; run with --visual for rendered assertions.")
 	await _check_history_reentry()
 	_check_monitor_safety(repo)
+	await _check_026(repo)
 	await _check_alignment_source(repo)
 	if OS.get_cmdline_user_args().has("--gittydot-ui-only"):
 		await _check_narrow_commit(repo)
@@ -193,12 +196,354 @@ func _run() -> void:
 	await panel._do_commit(false)
 	check("amend changes the latest commit message", String(repo.get_head_info().get("message", "")).strip_edges() == "Amended integration commit")
 	check("amend preserves the number of commits", Cli.run(repo.get_repo_root(), ["rev-list", "--count", "HEAD"])["text"].strip_edges() == before_amend)
+	await _wait_native_refresh()
+	# The fixture intentionally edits files outside the native editor. Resolve
+	# its own disk-change prompt before programmatically opening another modal.
+	# Real user input cannot reach the Commit controls through that modal.
+	await get_tree().process_frame
+	for dialog: ConfirmationDialog in EditorInterface.get_script_editor().find_children("*", "ConfirmationDialog", true, false):
+		if dialog.visible:
+			dialog.hide()
+			dialog.confirmed.emit()
+	await get_tree().process_frame
 	await _check_selected_amend(repo)
 	var previous_plugin := _fork.get_instance_id()
 	RepoSetup.reload_plugin()
 	await get_tree().create_timer(0.2).timeout
 	check("repository setup reloads GittyDot without enabling Godit", Autosave.instance != null and Autosave.instance.get_parent().get_instance_id() != previous_plugin and EditorInterface.is_plugin_enabled(RepoSetup.PLUGIN_PATH) and not EditorInterface.is_plugin_enabled("res://addons/godit/plugin.cfg"))
 	_finish()
+
+
+func _test_write(path: String, value: String) -> void:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(value)
+	file.close()
+
+
+func _test_repo(path: String) -> RefCounted:
+	DirAccess.make_dir_recursive_absolute(path)
+	Cli.run(path, ["init", "-b", "main"])
+	Cli.run(path, ["config", "user.name", "GittyDot Regression"])
+	Cli.run(path, ["config", "user.email", "regression@localhost"])
+	Cli.run(path, ["config", "core.autocrlf", "false"])
+	var isolated := Repo.new()
+	isolated.open(path)
+	return isolated
+
+
+func _check_026(repo: RefCounted) -> void:
+	var root: String = repo._temp_dir().path_join("fix-026")
+	var isolated := _test_repo(root)
+	_test_write(root.path_join("tracked.txt"), "original\n")
+	_test_write(root.path_join("delete.txt"), "delete me\n")
+	isolated.stage_files(["tracked.txt", "delete.txt"])
+	Cli.run(root, ["commit", "-m", "Safety fixture"])
+	_test_write(root.path_join("tracked.txt"), "partial staging\n")
+	isolated.stage_file("tracked.txt")
+	var partial: PackedByteArray = isolated.get_file_bytes(":", "tracked.txt")
+	_test_write(root.path_join("tracked.txt"), "working draft\n")
+	_test_write(root.path_join(".gitattributes"), "tracked.txt filter=blocked\n")
+	Cli.run(root, ["config", "filter.blocked.clean", "false"])
+	Cli.run(root, ["config", "filter.blocked.required", "true"])
+	var revision: int = Cli.log_snapshot()["revision"]
+	var failed: Dictionary = isolated.stage_files(["tracked.txt"])
+	check("failed clean filter preserves partial index blob and working draft", not failed["ok"] and not failed["error"].is_empty() and isolated.get_file_bytes(":", "tracked.txt") == partial and FileAccess.get_file_as_string(root.path_join("tracked.txt")) == "working draft\n")
+	check("single-file staging wrapper reports failure", not isolated.stage_file("tracked.txt"))
+	check("failed staging never falls back to cached removal", not Cli.log_snapshot()["entries"].any(func(entry: Dictionary) -> bool: return entry["id"] > revision and Array(entry["args"]).has("rm")))
+	var panel: Control = _fork.dock_instance._changes_panel
+	var saved_state: Dictionary = panel._changelist_state.duplicate(true)
+	var saved_status: Dictionary = panel._known_status.duplicate()
+	panel._repo = isolated
+	panel._changelist_state = {"active": "Default", "names": ["Default", "Other"], "assignments": {"tracked.txt": "Other"}, "messages": {}}
+	panel._known_status = {"tracked.txt": Flags.INDEX_MODIFIED | Flags.WT_MODIFIED}
+	panel._set_staged(["tracked.txt"], true)
+	check("checkbox failure refreshes from unchanged index", panel._error_dialog.visible and isolated.get_file_bytes(":", "tracked.txt") == partial)
+	panel._error_dialog.hide()
+	panel._move_files_to_changelist(["tracked.txt"], "Default")
+	check("failed changelist move keeps the previous assignment", panel._changelist_state["assignments"]["tracked.txt"] == "Other")
+	panel._error_dialog.hide()
+	panel._repo = repo
+	panel._changelist_state = saved_state
+	panel._known_status = saved_status
+	DirAccess.remove_absolute(root.path_join(".gitattributes"))
+	Cli.run(root, ["config", "--unset", "filter.blocked.required"])
+	var index := root.path_join(".git/index")
+	var index_before := FileAccess.get_file_as_bytes(index)
+	_test_write(root.path_join(".git/index.lock"), "locked")
+	check("locked index rejects grouped staging without index mutation", not isolated.stage_files(["tracked.txt", "delete.txt"])["ok"] and FileAccess.get_file_as_bytes(index) == index_before)
+	check("failed unstage on established HEAD never removes index entries", not isolated.unstage_files(["tracked.txt"])["ok"] and FileAccess.get_file_as_bytes(index) == index_before)
+	DirAccess.remove_absolute(root.path_join(".git/index.lock"))
+	DirAccess.remove_absolute(root.path_join("delete.txt"))
+	check("git add correctly stages tracked deletions", isolated.stage_file("delete.txt") and isolated.get_status().any(func(entry: Dictionary) -> bool: return entry["path"] == "delete.txt" and entry["status"] & Flags.INDEX_DELETED))
+	var unborn := _test_repo(root.path_join("unborn"))
+	_test_write(root.path_join("unborn/new.txt"), "new\n")
+	var staged: bool = unborn.stage_file("new.txt")
+	var head_path := root.path_join("unborn/.git/HEAD")
+	var original_head := FileAccess.get_file_as_string(head_path)
+	_test_write(head_path, "ref: refs/remotes/missing-nonbranch\n")
+	var malformed_safe: bool = not unborn.unstage_file("new.txt") and unborn.get_file_bytes(":", "new.txt").get_string_from_utf8() == "new\n"
+	_test_write(head_path, original_head)
+	check("unborn local branch unstages safely while malformed symbolic HEAD preserves index", staged and malformed_safe and unborn.unstage_file("new.txt") and FileAccess.file_exists(root.path_join("unborn/new.txt")) and unborn.get_file_bytes(":", "new.txt").is_empty())
+	await _check_026_scratch(root)
+	check("real diff and recovery scratch stays out of existing repository status without a scratch gitignore", not Cli.run(repo.get_repo_root(), ["status", "--porcelain", "--untracked-files=all"])["text"].contains("-temp-chatgpt/gittydot/"))
+	for pair in [[0, ""], [1, ""], [-1, ""], [0, "bad\n0\n-5\n11\n11\n10\n"]]:
+		var found := Cli.Job.discover_descendants(10, func(parent: int) -> Dictionary: return {"status": pair[0], "output": pair[1]} if parent == 10 else {"status": 1, "output": ""})
+		check("descendant discovery validates empty/failed/malformed query: %s" % str(pair), found["pids"] == (PackedStringArray(["11"]) if pair[1].contains("11") else PackedStringArray()) and found["complete"] == (pair[0] in [0, 1] and pair[1].is_empty()))
+	var tree: Tree = _fork.filesystem_colors._tree
+	var count := tree.item_collapsed.get_connections().size()
+	for cycle in 3:
+		var colors := Colors.new()
+		EditorInterface.get_base_control().add_child(colors)
+		check("FileSystem reload installs one collapse handler %d" % cycle, tree.item_collapsed.get_connections().size() == count + 1)
+		colors._paint.call_deferred()
+		colors._flush_list_paint.call_deferred()
+		colors.get_parent().remove_child(colors)
+		check("FileSystem teardown disconnects collapse handler %d" % cycle, tree.item_collapsed.get_connections().size() == count)
+		colors.free()
+		tree.item_collapsed.emit(tree.get_root())
+		await get_tree().process_frame
+	var stale := CodeEdit.new()
+	stale.set_meta(Gutter.META_RES_PATH, "res://missing-stale-file.txt")
+	_fork.script_menu._on_open_on_web(stale)
+	stale.set_meta(Gutter.META_RES_PATH, "")
+	_fork.script_menu._on_open_on_web(stale)
+	check("stale web action tolerates deleted file and missing repository", true)
+	stale.free()
+	await _check_026_worker(isolated)
+	await _check_026_autosave()
+	await _check_026_pipes()
+	if OS.get_name() == "Windows":
+		skip("native Unix descendant cancellation", "Windows host; injected pgrep cases are checked, native Linux/macOS cleanup remains unverified.")
+
+
+func _check_026_scratch(root: String) -> void:
+	var scratch := preload("res://addons/gittydot/util/scratch_space.gd")
+	var project := root.path_join("nested project [1] !#")
+	DirAccess.make_dir_recursive_absolute(project)
+	_test_write(root.path_join(".git/info/exclude"), "# preserve comment\nkeep-other-rule\n")
+	_test_write(root.path_join("visible.txt"), "unrelated\n")
+	var directory: String = scratch.prepare(project)
+	_test_write(directory.path_join("draft.json"), "private draft\n")
+	var status: String = Cli.run(root, ["status", "--porcelain", "--untracked-files=all"])["text"]
+	check("existing nested repo excludes exact scratch path with spaces and metacharacters", not directory.is_empty() and not status.contains("draft.json") and status.contains("visible.txt") and FileAccess.get_file_as_string(root.path_join(".git/info/exclude")).begins_with("# preserve comment\nkeep-other-rule\n"))
+	check("scratch protection does not modify a tracked gitignore", not FileAccess.file_exists(root.path_join(".gitignore")))
+	var denied := root.path_join("read-only-exclude")
+	_test_write(denied, "# read only\n")
+	var metadata: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://run-metadata.json"))
+	var python: String = metadata["python_executable"]
+	Cli.execute(python, PackedStringArray(["-c", "import os,stat,sys;os.chmod(sys.argv[1],stat.S_IREAD)", denied]))
+	check("unwritable exclude refuses new scratch operations", not scratch.exclude_directory(root, root.path_join("denied/gittydot"), denied, root.path_join(".git/index")))
+	Cli.execute(python, PackedStringArray(["-c", "import os,stat,sys;os.chmod(sys.argv[1],stat.S_IREAD|stat.S_IWRITE)", denied]))
+	Cli.run(root, ["add", "-f", "--", directory.path_join("draft.json")])
+	check("already-tracked scratch is reported without untracking or deletion", scratch.prepare(project).is_empty() and FileAccess.file_exists(directory.path_join("draft.json")) and not Cli.run(root, ["ls-files", "--", directory.path_join("draft.json")])["text"].is_empty())
+	# A linked worktree resolves info/exclude through Git, never '.git/info'.
+	var linked := root.path_join("linked-worktree")
+	var made := Cli.run(root, ["worktree", "add", "-b", "scratch-linked", linked, "HEAD"])
+	var work: String = scratch.prepare(linked) if made["exit_code"] == 0 else ""
+	if not work.is_empty():
+		_test_write(work.path_join("patch.tmp"), "scratch\n")
+	check("linked worktree resolves local exclusion safely", not work.is_empty() and not Cli.run(linked, ["status", "--porcelain", "--untracked-files=all"])["text"].contains("patch.tmp"))
+	var negate := root.path_join("negated project")
+	DirAccess.make_dir_recursive_absolute(negate)
+	_test_write(root.path_join(".gitignore"), "!/negated project/negated project-temp-chatgpt/gittydot/\n!/negated project/negated project-temp-chatgpt/gittydot/**\n")
+	check("conflicting higher-priority ignore rules block scratch creation", scratch.prepare(negate).is_empty())
+	DirAccess.remove_absolute(root.path_join(".gitignore"))
+
+
+func _wait_026_worker(gutter: Node) -> void:
+	await get_tree().create_timer(0.3).timeout
+	var deadline := Time.get_ticks_msec() + 10000
+	while gutter._worker.busy() and Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+
+
+func _wait_native_refresh() -> void:
+	var deadline := Time.get_ticks_msec() + 10000
+	while Open.native_refresh_pending() and Time.get_ticks_msec() < deadline:
+		await get_tree().create_timer(0.05).timeout
+
+
+func _check_026_worker(repo: RefCounted) -> void:
+	var gutter := Gutter.new()
+	add_child(gutter)
+	gutter.enable(self)
+	gutter._refresh_timer.active = false
+	var code := CodeEdit.new()
+	EditorInterface.get_base_control().add_child(code)
+	code.hide()
+	var path: String = repo.get_repo_root().path_join("tracked.txt")
+	var old_started := Time.get_ticks_usec()
+	for sample in 3:
+		var baseline: Variant = repo.get_head_text("tracked.txt")
+		repo.diff_texts(str(baseline), "benchmark snapshot %d\n" % sample)
+	print("GITTYDOT BENCHMARK previous_main_thread_sample ", JSON.stringify({"requests": 3, "git_launches": 6, "scratch_writes": 6, "blocking_usec": Time.get_ticks_usec() - old_started}))
+	var started := Time.get_ticks_usec()
+	for number in 30:
+		code.text = "latest %d\n" % number
+		gutter.refresh_code_edit(code, path, true)
+	var submit_usec := Time.get_ticks_usec() - started
+	check("gutter queue coalesces typing bursts with bounded outstanding work", gutter._worker._pending.size() <= 1)
+	await _wait_026_worker(gutter)
+	check("background gutter applies only the latest buffer snapshot", code.get_meta(Gutter.META_SIGNATURE, "").contains(str(Gutter._normalized(code.text).hash())) and not code.get_meta(Gutter.META_FLAGS, {}).is_empty())
+	check("immutable HEAD cache avoids refetching for coalesced edits", gutter._worker.metrics["head_fetches"] == 1 and gutter._worker.metrics["diff_launches"] <= 2)
+	var before: Dictionary = gutter._worker.metrics.duplicate()
+	for tick in 10:
+		gutter.refresh_code_edit(code, path)
+	await get_tree().process_frame
+	var tracked_idle: bool = gutter._worker.metrics == before and not gutter._worker.busy()
+	code.text = "next edit\n"
+	gutter.refresh_code_edit(code, path, true)
+	await _wait_026_worker(gutter)
+	check("subsequent changed-buffer diff reuses cached HEAD", gutter._worker.metrics["head_fetches"] == 1 and gutter._worker.metrics["diff_launches"] > before["diff_launches"])
+	code.text = "head race\n"
+	gutter.refresh_code_edit(code, path, true)
+	Cli.run(repo.get_repo_root(), ["commit", "-m", "Moved HEAD"])
+	var head: String = repo.read_head_oid()
+	await _wait_026_worker(gutter)
+	check("changed HEAD invalidates an in-flight gutter result", not code.get_meta(Gutter.META_SIGNATURE, "").contains(head))
+	gutter.refresh_code_edit(code, path, true)
+	await _wait_026_worker(gutter)
+	check("new HEAD receives its own immutable baseline", code.get_meta(Gutter.META_SIGNATURE, "").contains(head) and gutter._worker.metrics["head_fetches"] == 2)
+	gutter.refresh_code_edit(code, path, true)
+	var renamed: String = repo.get_repo_root().path_join("renamed.txt")
+	DirAccess.rename_absolute(path, renamed)
+	gutter.refresh_code_edit(code, renamed, true)
+	await _wait_026_worker(gutter)
+	check("file move discards the old-path result", code.get_meta(Gutter.META_RES_PATH, "") == renamed and not code.get_meta(Gutter.META_FLAGS, {}).is_empty())
+	_test_write(repo.get_repo_root().path_join(".gitignore"), "renamed.txt\n")
+	gutter.refresh_code_edit(code, renamed, true)
+	await _wait_026_worker(gutter)
+	check("ignored missing baseline is not cached as a permanent result", code.get_meta(Gutter.META_FLAGS, {}).is_empty() and code.get_meta(Gutter.META_SIGNATURE, "").is_empty())
+	DirAccess.remove_absolute(repo.get_repo_root().path_join(".gitignore"))
+	gutter.refresh_code_edit(code, renamed)
+	await _wait_026_worker(gutter)
+	var local_status_ok: bool = not code.get_meta(Gutter.META_FLAGS, {}).is_empty()
+	print("GITTYDOT BENCHMARK gutter ", JSON.stringify({"submit_30_usec": submit_usec, "metrics": gutter._worker.metrics}))
+	code.text = "close while computing\n"
+	gutter.refresh_code_edit(code, renamed, true)
+	code.free()
+	await _wait_026_worker(gutter)
+	check("closed tab rejects late worker result", not gutter._targets.values().any(func(value: WeakRef) -> bool: return value.get_ref() != null))
+	# The shared watcher permits absent-baseline caching for the main repo.
+	# It must invalidate on real ignore changes, while idle new files stay quiet.
+	var main_repo: RefCounted = _fork.dock_instance._repo
+	var main_root: String = main_repo.get_repo_root()
+	gutter._on_repo_status({"status": Cli.run(main_root, Repo.STATUS_ARGS)["text"]})
+	var fresh := CodeEdit.new()
+	EditorInterface.get_base_control().add_child(fresh)
+	fresh.hide()
+	fresh.text = FileAccess.get_file_as_string("res://new_file.gd")
+	gutter.refresh_code_edit(fresh, "res://new_file.gd", true)
+	await _wait_026_worker(gutter)
+	var idle: Dictionary = gutter._worker.metrics.duplicate()
+	for tick in 10:
+		gutter.refresh_code_edit(fresh, "res://new_file.gd")
+	await get_tree().process_frame
+	check("unchanged tracked and new-file gutter polling launches no Git or scratch writes", tracked_idle and gutter._worker.metrics == idle and not gutter._worker.busy())
+	var exclude: String = main_repo.get_git_dir().path_join("info/exclude")
+	var original_exclude := FileAccess.get_file_as_bytes(exclude)
+	var exclude_file := FileAccess.open(exclude, FileAccess.WRITE)
+	exclude_file.store_buffer(original_exclude)
+	exclude_file.store_string("\n/new_file.gd\n")
+	exclude_file.close()
+	gutter._on_repo_status({"status": Cli.run(main_root, Repo.STATUS_ARGS)["text"]})
+	await _wait_026_worker(gutter)
+	var ignored: bool = fresh.get_meta(Gutter.META_FLAGS, {}).is_empty()
+	exclude_file = FileAccess.open(exclude, FileAccess.WRITE)
+	exclude_file.store_buffer(original_exclude)
+	exclude_file.close()
+	gutter._on_repo_status({"status": Cli.run(main_root, Repo.STATUS_ARGS)["text"]})
+	await _wait_026_worker(gutter)
+	check("status changes restore absent baselines without a HEAD change in watched and nested repos", local_status_ok and ignored and not fresh.get_meta(Gutter.META_FLAGS, {}).is_empty())
+	fresh.free()
+	var closing := CodeEdit.new()
+	EditorInterface.get_base_control().add_child(closing)
+	closing.hide()
+	closing.text = "stop a running request\n"
+	gutter.refresh_code_edit(closing, renamed, true)
+	gutter.disable()
+	check("gutter disable cancels joins and drains queued requests", not gutter._worker.busy() and gutter._targets.is_empty())
+	closing.free()
+	gutter.queue_free()
+	await get_tree().process_frame
+
+
+func _check_026_autosave() -> void:
+	EditorInterface.edit_script(load("res://tracked.gd"))
+	await get_tree().create_timer(0.2).timeout
+	var autosave: Node = _fork.autosave
+	autosave.discover_tabs()
+	var baseline_reads := Autosave.content_reads
+	var baseline_started := Time.get_ticks_usec()
+	for tick in 50:
+		for tab: Dictionary in autosave._tabs.values():
+			Autosave._disk_text(tab["path"])
+	print("GITTYDOT BENCHMARK previous_discovery_reads ", JSON.stringify({"discoveries": 50, "content_reads": Autosave.content_reads - baseline_reads, "elapsed_usec": Time.get_ticks_usec() - baseline_started}))
+	var reads := Autosave.content_reads
+	var started := Time.get_ticks_usec()
+	for tick in 50:
+		autosave.discover_tabs()
+	check("idle discovery performs zero full-content reads for known tabs", Autosave.content_reads == reads)
+	print("GITTYDOT BENCHMARK discovery ", JSON.stringify({"discoveries": 50, "content_reads": Autosave.content_reads - reads, "elapsed_usec": Time.get_ticks_usec() - started}))
+	var enabled: bool = autosave.enabled
+	autosave.set_enabled(false)
+	for tick in 10:
+		autosave.discover_tabs()
+	check("paused autosave discovery performs zero full-content reads", Autosave.content_reads == reads)
+	var code: CodeEdit = EditorInterface.get_script_editor().get_current_editor().get_base_editor()
+	var original := FileAccess.get_file_as_string("res://tracked.gd")
+	var timestamp := FileAccess.get_modified_time("res://tracked.gd")
+	code.set_caret_line(code.get_line_count() - 1)
+	code.insert_text_at_caret("# dirty draft\n")
+	_test_write("res://tracked.gd", original.replace("number := 3", "number := 8"))
+	var metadata: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://run-metadata.json"))
+	Cli.execute(metadata["python_executable"], PackedStringArray(["-c", "import os,sys;os.utime(sys.argv[1],(int(sys.argv[2]),int(sys.argv[2])))", ProjectSettings.globalize_path("res://tracked.gd"), str(timestamp)]))
+	check("same-size same-timestamp disk edit still blocks autosave", not autosave.flush_pending() and FileAccess.get_modified_time("res://tracked.gd") == timestamp and FileAccess.get_file_as_string("res://tracked.gd").contains("number := 8") and code.text.contains("dirty draft"))
+	_test_write("res://tracked.gd", original)
+	# Restore metadata as well as bytes so this intentional external-edit
+	# regression does not leave Godot's native reload prompt pending.
+	Cli.execute(metadata["python_executable"], PackedStringArray(["-c", "import os,sys;os.utime(sys.argv[1],(int(sys.argv[2]),int(sys.argv[2])))", ProjectSettings.globalize_path("res://tracked.gd"), str(timestamp)]))
+	code.undo()
+	autosave.discover_tabs()
+	autosave.set_enabled(enabled)
+	EditorInterface.set_main_screen_editor("Script")
+	_fork.diff_gutter._refresh_current()
+	await _wait_026_worker(_fork.diff_gutter)
+	EditorInterface.set_main_screen_editor("2D")
+	await get_tree().process_frame
+	var requests: int = _fork.diff_gutter._worker.metrics["requests"]
+	_fork.diff_gutter._on_buffer_changed(code)
+	_fork.diff_gutter.refresh_code_edit(code, "res://tracked.gd", true)
+	await _wait_026_worker(_fork.diff_gutter)
+	check("hidden native script tabs defer gutter work during scene workflows", not code.is_visible_in_tree() and _fork.diff_gutter._worker.metrics["requests"] == requests)
+	EditorInterface.set_main_screen_editor("Script")
+	_fork.diff_gutter._refresh_current()
+	await _wait_026_worker(_fork.diff_gutter)
+	check("returning to a native script restores invalidated gutter flags", not code.get_meta(Gutter.META_SIGNATURE, "").is_empty() and not code.get_meta(Gutter.META_FLAGS, {}).is_empty())
+
+
+func _check_026_pipes() -> void:
+	var metadata: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://run-metadata.json"))
+	var python: String = metadata["python_executable"]
+	var job := Cli.Job.new()
+	job.start_task(func(owner: RefCounted) -> Dictionary: return Cli.execute(python, PackedStringArray(["-c", "import sys;sys.stdout.write('o'*1048576);sys.stdout.flush();sys.stderr.write('e'*1048576);sys.stderr.flush();sys.exit(7)"]), owner))
+	var result: Dictionary = await job.finished
+	check("both large process pipes drain concurrently with real exit status", result["exit_code"] == 7 and result["out"].size() == 1048576 and result["err"].size() == 1048576)
+	job = Cli.Job.new()
+	var pid_file: String = _fork.dock_instance._repo._temp_dir().path_join("cancel-helper.pid")
+	job.start_task(func(owner: RefCounted) -> Dictionary: return Cli.execute(python, PackedStringArray(["-c", "import subprocess,sys,time;p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']);open(sys.argv[1],'w').write(str(p.pid));time.sleep(30)", pid_file]), owner))
+	var deadline := Time.get_ticks_msec() + 5000
+	while not FileAccess.file_exists(pid_file) and Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+	var started := Time.get_ticks_msec()
+	job.cancel()
+	result = await job.finished
+	check("active worker cancellation closes inherited helper pipes without hanging", result["exit_code"] == -1 and Time.get_ticks_msec() - started < 5000)
+	job = Cli.Job.new()
+	job.start_task(func(owner: RefCounted) -> Dictionary: return Cli.execute(python, PackedStringArray(["-c", "import time;time.sleep(30)"]), owner))
+	job.cancel()
+	result = await job.finished
+	check("cancellation before PID registration does not lose the request", result["exit_code"] == -1)
 
 
 func _check_selected_amend(repo: RefCounted) -> void:
@@ -250,6 +595,7 @@ func _check_selected_amend(repo: RefCounted) -> void:
 	var before: String = amendment.get_head_oid()
 	if not Repo.selected_amend_version_supported(amendment.git_version_text()):
 		var blocked: Dictionary = amendment.amend_commit(old_target, "blocked amendment")
+		skip("selected history amendment execution", "Installed Git is below 2.45; compatibility rejection is checked instead.")
 		check("actual older Git returns the compatibility error without changing history", not blocked["ok"] and blocked["error"].contains("2.45.0") and amendment.get_head_oid() == before and amendment.has_staged_changes())
 		return
 	panel._repo = amendment
@@ -281,8 +627,10 @@ func _check_selected_amend(repo: RefCounted) -> void:
 		panel._repo = repo
 		return
 	confirm.confirmed.emit()
+	check("confirmation releases its modal before the awaiting operation resumes", not is_instance_valid(confirm) or not confirm.visible)
 	await get_tree().process_frame
-	check("Commit dock submits selected amendment and clears target after success", not panel._commit_busy and not panel._amend_check.button_pressed and panel._amend_target.is_empty() and panel._commit_message.text.is_empty() and amendment.get_head_oid() != before)
+	await _wait_native_refresh()
+	check("Commit dock submits selected amendment and finishes serialized native refresh", not Open.native_refresh_pending() and not panel._commit_busy and not panel._amend_check.button_pressed and panel._amend_target.is_empty() and panel._commit_message.text.is_empty() and amendment.get_head_oid() != before)
 	panel._repo = repo
 	panel.refresh()
 	check("selected amendment preserves commit count and newer commit content", Cli.run(rroot, ["rev-list", "--count", "HEAD"])["text"].strip_edges() == "3" and amendment.get_file_bytes("HEAD", "later.txt").get_string_from_utf8() == "preserve later commit\n")
@@ -350,7 +698,7 @@ func _check_narrow_commit(repo: RefCounted) -> void:
 		if OS.get_cmdline_user_args().has("--gittydot-visual"):
 			RenderingServer.force_draw(false)
 			var image := shell.get_viewport().get_texture().get_image().get_region(Rect2i(Vector2i(shell.global_position), Vector2i(shell.size)))
-			image.save_png("res://commit-%d.png" % width)
+			image.save_png(_capture_path("commit-%d.png" % width))
 	shell.queue_free()
 	await get_tree().process_frame
 
@@ -536,7 +884,7 @@ func _check_editable_diff(repo: RefCounted) -> void:
 		check("aligned panes retain the scrolled insertion viewport after deferred layout", scrolling._panes[1].scroll_vertical == scrolling._codes[1].get_line_height() * 37 and scrolling._panes[0].scroll_vertical == scrolling._panes[1].scroll_vertical)
 		RenderingServer.force_draw(false)
 		var capture := shell.get_viewport().get_texture().get_image().get_region(Rect2i(Vector2i(shell.global_position), Vector2i(shell.size)))
-		check("graphical editor captures the editable working-file panes", capture != null and not capture.is_empty() and capture.save_png("res://editable-working-diff.png") == OK)
+		check("graphical editor captures the editable working-file panes", capture != null and not capture.is_empty() and capture.save_png(_capture_path("editable-working-diff.png")) == OK)
 		var viewport_image := shell.get_viewport().get_texture().get_image()
 		var colored := true
 		for side in 2:
@@ -576,12 +924,13 @@ func _check_editable_diff(repo: RefCounted) -> void:
 			spans_match = spans_match and found_span
 		check("editable replacement backgrounds render the shared committed-diff palette", blocks_match)
 		check("editable replacement spans render the shared committed-diff palette", spans_match)
-		viewport_image.get_region(Rect2i(Vector2i(shell.global_position), Vector2i(shell.size))).save_png("res://editable-working-replacement.png")
+		viewport_image.get_region(Rect2i(Vector2i(shell.global_position), Vector2i(shell.size))).save_png(_capture_path("editable-working-replacement.png"))
 	shell.queue_free()
 	await get_tree().process_frame
 	var original: String = right.get_source_text()
 	if OS.get_cmdline_user_args().has("--gittydot-ui-only"):
-		return # Layout/navigation loop; saving, native scenes and scripts use the full suite.
+		skip("full comparison save/recovery/native editor coverage", "Focused UI profile; run without --ui-only for full coverage.")
+		return
 	var staged: PackedByteArray = repo.get_file_bytes(":", "editable.txt")
 	right.set_caret_line(2)
 	right.set_caret_column(right.get_line(2).length())
@@ -661,10 +1010,13 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	view.flush()
 	check("successful recovery save removes the stored draft", not FileAccess.file_exists(recovery))
 	# Prepare the native scene fixture outside the custom main screen's draw pass.
+	# Imports queued by the atomic recovery save can begin after is_scanning()
+	# first returns false. Let the import/progress loop settle before scene load.
+	await get_tree().create_timer(0.2).timeout
 	EditorInterface.set_main_screen_editor("2D")
-	await get_tree().process_frame
+	await get_tree().create_timer(0.1).timeout
 	while EditorInterface.get_resource_filesystem().is_scanning():
-		await get_tree().process_frame
+		await get_tree().create_timer(0.1).timeout
 	# Native scene loading runs an editor progress loop. Enter it from idle,
 	# not inside process_frame/import notifications dispatched by that same loop.
 	EditorInterface.open_scene_from_path.call_deferred("res://editable_scene.tscn")
@@ -686,7 +1038,11 @@ func _check_editable_diff(repo: RefCounted) -> void:
 	for frame in 2:
 		await get_tree().process_frame
 	check("compatibility scene detection retains an unsaved native scene", Open.unsaved_scenes().has("res://editable_scene.tscn"))
-	check("comparison save guard recognizes the dirty native scene", WorkingDiff.native_dirty(ProjectSettings.globalize_path("res://editable_scene.tscn")))
+	var dirty_scene := EditorInterface.get_edited_scene_root()
+	Open.refresh_all_external_changes()
+	await _wait_native_refresh()
+	check("native refresh preserves dirty scene drafts and comparison save protection", not Open.native_refresh_pending() and dirty_scene == EditorInterface.get_edited_scene_root() and WorkingDiff.native_dirty(ProjectSettings.globalize_path("res://editable_scene.tscn")))
+	await get_tree().process_frame
 	EditorInterface.save_scene()
 	for frame in 2:
 		await get_tree().process_frame
@@ -987,7 +1343,7 @@ func _capture_visual_preview(rows: Dictionary, old: String, current: String) -> 
 	RenderingServer.force_draw(false)
 	var root_capture := code.get_viewport().get_texture().get_image()
 	var capture := root_capture.get_region(Rect2i(Vector2i(code.global_position), Vector2i(code.size)))
-	check("graphical renderer captures the actual native preview", capture != null and not capture.is_empty() and capture.save_png("res://inline-highlights.png") == OK)
+	check("graphical renderer captures the actual native preview", capture != null and not capture.is_empty() and capture.save_png(_capture_path("inline-highlights.png")) == OK)
 	if capture != null and not capture.is_empty():
 		var replacement := code.get_rect_at_line_column(0, current.find("3") + 1)
 		var unchanged := code.get_rect_at_line_column(0, 0)
@@ -1061,7 +1417,7 @@ func _check_diff_panes() -> void:
 			await get_tree().process_frame
 		RenderingServer.force_draw(false)
 		var capture := diff.get_viewport().get_texture().get_image().get_region(Rect2i(Vector2i(diff.global_position), Vector2i(diff.size)))
-		check("graphical renderer captures the split diff panes", capture.save_png("res://split-diff.png") == OK)
+		check("graphical renderer captures the split diff panes", capture.save_png(_capture_path("split-diff.png")) == OK)
 	diff.show_diff("diff --git a/short.gd b/short.gd\n--- a/short.gd\n+++ b/short.gd\n@@ -1 +1 @@\n-# before\n+# after\n", {"path": "short.gd"})
 	for frame in 8:
 		await get_tree().process_frame
@@ -1316,9 +1672,28 @@ func _find_file(item: TreeItem, path: String) -> TreeItem:
 	return null
 
 
+func skip(label: String, reason: String) -> void:
+	checks.append({"name": label, "passed": null, "skip_reason": reason})
+	print("GITTYDOT TEST SKIP ", label, " — ", reason)
+
+
+func _capture_path(name: String) -> String:
+	var project := ProjectSettings.globalize_path("res://").trim_suffix("/")
+	var output := project.get_base_dir().path_join(project.get_file() + "-artifacts-temp-chatgpt")
+	DirAccess.make_dir_recursive_absolute(output)
+	return output.path_join(name)
+
+
 func _finish() -> void:
-	var failed := checks.filter(func(item: Dictionary) -> bool: return not item["passed"])
-	var result := {"checks": checks, "passed": checks.size() - failed.size(), "failed": failed.size()}
+	await _wait_native_refresh()
+	# A scan can schedule imports just after is_scanning becomes false.
+	for settle in 2:
+		await get_tree().create_timer(0.1).timeout
+		while EditorInterface.get_resource_filesystem().is_scanning():
+			await get_tree().create_timer(0.05).timeout
+	var failed := checks.filter(func(item: Dictionary) -> bool: return item["passed"] == false)
+	var skipped := checks.filter(func(item: Dictionary) -> bool: return item["passed"] == null)
+	var result := {"checks": checks, "passed": checks.size() - failed.size() - skipped.size(), "failed": failed.size(), "skipped": skipped.size()}
 	var file := FileAccess.open("res://integration-result.json", FileAccess.WRITE)
 	file.store_string(JSON.stringify(result, "\t"))
 	file.close()

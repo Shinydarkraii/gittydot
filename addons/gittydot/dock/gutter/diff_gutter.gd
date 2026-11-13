@@ -14,11 +14,13 @@ const PollTimer := preload("res://addons/gittydot/util/poll_timer.gd")
 const EditorOpen := preload("res://addons/gittydot/util/editor_open.gd")
 const InlineDiff := preload("res://addons/gittydot/util/inline_diff.gd")
 const InlineHighlights := preload("res://addons/gittydot/dock/gutter/inline_highlights.gd")
+const RepoWatcher := preload("res://addons/gittydot/util/repo_watcher.gd")
 
 const GUTTER_NAME := "gittydot_diff"
 const GUTTER_WIDTH := 14
 const REFRESH_INTERVAL := 2.0
-const LAYER_VERSION := 2
+const LAYER_VERSION := 3
+const BufferWorker := preload("res://addons/gittydot/util/buffer_diff_worker.gd")
 
 ## line (1-based) -> {"type": "added"|"modified"|"deleted_before"|"deleted_after", "region": index into META_REGIONS}.
 const META_FLAGS := "godit_diff_flags"
@@ -28,6 +30,8 @@ const META_REL_PATH := "godit_rel_path"
 const META_RES_PATH := "godit_res_path"
 ## Path, text hash and HEAD the flags were computed from, so unchanged tabs skip git.
 const META_SIGNATURE := "godit_diff_signature"
+const META_ABSENT := "gittydot_absent_baseline"
+const META_ROOT := "gittydot_gutter_repo_root"
 
 var _script_editor: ScriptEditor
 var _refresh_timer: PollTimer
@@ -36,9 +40,22 @@ var _connections: Array = []
 var _preview: Control
 var _edit_timer: Timer
 var _pending_edits := {}
+var _worker: RefCounted
+var _targets := {}
+var _requested := {}
+var _generations := {}
+var _enabled := false
+var _watcher: Node
+var _last_status := ""
 
 
 func enable(_plugin: EditorPlugin) -> void:
+	_enabled = true
+	_worker = BufferWorker.new()
+	_worker.completed.connect(_computed)
+	_watcher = RepoWatcher.instance
+	if _watcher != null:
+		_watcher.polled.connect(_on_repo_status)
 	_script_editor = EditorInterface.get_script_editor()
 
 	_refresh_timer = PollTimer.new(REFRESH_INTERVAL)
@@ -53,10 +70,20 @@ func enable(_plugin: EditorPlugin) -> void:
 
 
 func disable() -> void:
+	_enabled = false
+	if is_instance_valid(_watcher) and _watcher.polled.is_connected(_on_repo_status):
+		_watcher.polled.disconnect(_on_repo_status)
+	if _worker != null:
+		_worker.stop()
+	_targets.clear()
+	_requested.clear()
+	_generations.clear()
 	close_preview()
 	if _refresh_timer:
+		_refresh_timer.active = false
 		_refresh_timer.queue_free()
 	if is_instance_valid(_edit_timer):
+		_edit_timer.stop()
 		_edit_timer.queue_free()
 	_pending_edits.clear()
 	for pair in _connections:
@@ -75,6 +102,17 @@ func disable() -> void:
 	_connections.clear()
 
 
+func _on_repo_status(snapshot: Dictionary) -> void:
+	if not _enabled or not is_instance_valid(_watcher) or _watcher.repo == null or snapshot["status"] == _last_status:
+		return
+	_last_status = snapshot["status"]
+	var root: String = _watcher.repo.get_repo_root()
+	for target: WeakRef in _targets.values():
+		var code := target.get_ref() as CodeEdit
+		if code != null and code.get_meta(META_ROOT, "") == root and code.get_meta(META_ABSENT, true):
+			_on_buffer_changed(code)
+
+
 ## The script editor's current CodeEdit, or null.
 func current_code_edit() -> CodeEdit:
 	if _script_editor == null:
@@ -84,11 +122,16 @@ func current_code_edit() -> CodeEdit:
 
 
 func _refresh_current() -> void:
-	if _script_editor == null:
+	if not _enabled or EditorOpen.native_refresh_pending() or _script_editor == null:
 		return
+	for key in _targets.keys():
+		if _targets[key].get_ref() == null:
+			_targets.erase(key)
+			_requested.erase(key)
+			_generations.erase(key)
 	var code_edit := current_code_edit()
 	var res_path := EditorOpen.current_tab_path()
-	if code_edit == null or not res_path.begins_with("res://"):
+	if code_edit == null or not code_edit.is_visible_in_tree() or not res_path.begins_with("res://"):
 		return
 	refresh_code_edit(code_edit, res_path)
 	var editor := _script_editor.get_current_editor()
@@ -111,28 +154,65 @@ static func resolve_repo(res_path: String) -> Dictionary:
 			return {}
 		_repos[dir] = repo
 	var repo_root: String = repo.get_repo_root()
-	if not abs_path.begins_with(repo_root):
+	if not abs_path.begins_with(repo_root.trim_suffix("/") + "/") or not DirAccess.dir_exists_absolute(repo.get_git_dir()):
 		return {}
 	return { "repo": repo, "rel_path": abs_path.substr(repo_root.length() + 1) }
 
 
 ## Recomputes code_edit's flags unless its text and HEAD are unchanged since last time (force skips that check).
 func refresh_code_edit(code_edit: CodeEdit, res_path: String, force := false) -> void:
+	if not _enabled or EditorOpen.native_refresh_pending():
+		return
+	if _script_editor != null and _script_editor.is_ancestor_of(code_edit) and not code_edit.is_visible_in_tree():
+		return # Hidden native tabs are refreshed when shown, outside scene-load UI.
 	var resolved := resolve_repo(res_path)
 	if resolved.is_empty():
 		return
 	var repo: RefCounted = resolved["repo"]
 	var text := _normalized(code_edit.text)
-	var signature := "%s|%d|%s|%d" % [resolved["rel_path"], text.hash(), repo.read_head_oid(), LAYER_VERSION]
+	var head: String = repo.read_head_oid()
+	var signature := "%s|%s|%s|%d|%d" % [repo.get_repo_root(), res_path, head, text.hash(), LAYER_VERSION]
 	_install_gutter(code_edit)
 	code_edit.set_meta(META_REL_PATH, resolved["rel_path"])
 	code_edit.set_meta(META_RES_PATH, res_path)
-	if not force and code_edit.get_meta(META_SIGNATURE, "") == signature:
+	code_edit.set_meta(META_ROOT, repo.get_repo_root())
+	var key := code_edit.get_instance_id()
+	if (not force and code_edit.get_meta(META_SIGNATURE, "") == signature) or (_requested.get(key, "") == signature and _worker.has_request(key, signature)):
 		return
-	code_edit.set_meta(META_SIGNATURE, signature)
+	var scratch: String = repo._temp_dir()
+	if scratch.is_empty():
+		return
+	_targets[key] = weakref(code_edit)
+	_requested[key] = signature
+	code_edit.set_meta(META_ABSENT, true) # Status changes must invalidate pending interpretations too.
+	_worker.submit({"key": key, "generation": _generations.get(key, 0), "signature": signature, "root": repo.get_repo_root(), "resource": res_path, "path": resolved["rel_path"], "head": head, "text": text, "scratch": scratch})
 
-	var head_text: Variant = repo.get_head_text(resolved["rel_path"])
-	var regions: Array = [] if head_text == null else DiffHunks.parse_regions(repo.diff_texts(_normalized(head_text), text))
+
+func _computed(request: Dictionary, result: Dictionary) -> void:
+	if not _enabled:
+		return
+	var key: int = request["key"]
+	if _requested.get(key, "") == request["signature"]:
+		_requested.erase(key)
+	var code_edit: CodeEdit = _targets[key].get_ref() if _targets.has(key) else null
+	if code_edit == null:
+		_targets.erase(key)
+		_generations.erase(key)
+		return
+	if EditorOpen.native_refresh_pending():
+		return
+	if _script_editor != null and _script_editor.is_ancestor_of(code_edit) and not code_edit.is_visible_in_tree():
+		return
+	if not result["ok"] or _generations.get(key, 0) != request["generation"] or code_edit.get_meta(META_RES_PATH, "") != request["resource"] or _normalized(code_edit.text) != request["text"]:
+		return
+	var resolved := resolve_repo(request["resource"])
+	if resolved.is_empty() or resolved["repo"].get_repo_root() != request["root"] or resolved["repo"].read_head_oid() != request["head"]:
+		return
+	var regions: Array = result["regions"]
+	var missing: bool = result.get("missing", false)
+	var watched: bool = is_instance_valid(_watcher) and _watcher.repo != null and _watcher.repo.get_repo_root() == request["root"]
+	code_edit.set_meta(META_ABSENT, missing)
+	code_edit.set_meta(META_SIGNATURE, request["signature"] if not missing or watched else "")
 	code_edit.set_meta(META_REGIONS, regions)
 	code_edit.set_meta(META_FLAGS, _flags_for(regions))
 	var rows := {}
@@ -150,6 +230,10 @@ func refresh_code_edit(code_edit: CodeEdit, res_path: String, force := false) ->
 
 func _on_buffer_changed(code_edit: CodeEdit) -> void:
 	# Drop stale coordinates immediately; recompute after a short typing pause.
+	var key := code_edit.get_instance_id()
+	_generations[key] = _generations.get(key, 0) + 1
+	_requested.erase(key)
+	code_edit.set_meta(META_SIGNATURE, "")
 	code_edit.set_meta(META_FLAGS, {})
 	_pending_edits[code_edit] = code_edit.get_meta(META_RES_PATH, "")
 	if is_instance_valid(_edit_timer):

@@ -68,20 +68,29 @@ static func run_bytes(repo_root: String, args: Array) -> PackedByteArray:
 
 
 ## Runs program with argv passed straight through: {"exit_code", "out", "err"} as bytes. OS.execute() with output goes through `sh -c` on macOS/Linux with args only wrapped in "…", so quotes break it and $() or backticks in a message or file name would run.
-static func execute(program: String, args: PackedStringArray) -> Dictionary:
+static func execute(program: String, args: PackedStringArray, owner: RefCounted = null) -> Dictionary:
+	if owner != null and owner.cancelled():
+		return {"exit_code": -1, "out": PackedByteArray(), "err": PackedByteArray()}
 	var info := OS.execute_with_pipe(program, args, true)
 	if info.is_empty():
 		return { "exit_code": -1, "out": PackedByteArray(), "err": PackedByteArray() }
 	var stderr: FileAccess = info["stderr"]
+	if owner != null:
+		owner.register_pid(info["pid"])
 	# Both pipes drained at once, so a chatty stderr can't fill up and stall the process.
 	var err_thread := Thread.new()
 	err_thread.start(func() -> PackedByteArray: return _read_all(stderr))
 	var out := _read_all(info["stdio"])
 	var err: PackedByteArray = err_thread.wait_to_finish()
 	var pid: int = info["pid"]
-	while OS.is_process_running(pid):
-		OS.delay_usec(100)
-	return { "exit_code": OS.get_process_exit_code(pid), "out": out, "err": err }
+	var exit_code := -1
+	if owner != null:
+		exit_code = owner.wait_for_exit(pid)
+	else:
+		while OS.is_process_running(pid):
+			OS.delay_msec(5)
+		exit_code = OS.get_process_exit_code(pid)
+	return {"exit_code": exit_code, "out": out, "err": err}
 
 
 ## Reads a blocking pipe until the process closes it.
@@ -221,6 +230,47 @@ class Job:
 	var _abandoned := false
 	## Guards _pid/_cancelled: cancel() can arrive before the worker has the pid.
 	var _mutex := Mutex.new()
+	var _task := Callable()
+	var descendant_discovery_complete := true
+
+
+	func start_task(task: Callable) -> void:
+		_task = task
+		is_running = true
+		_thread = Thread.new()
+		_thread.start(func() -> void: _finish.call_deferred(_task.call(self)))
+
+
+	func cancelled() -> bool:
+		_mutex.lock()
+		var value := _cancelled
+		_mutex.unlock()
+		return value
+
+
+	func register_pid(pid: int) -> void:
+		_mutex.lock()
+		_pid = pid
+		if pid > 0 and _cancelled:
+			descendant_discovery_complete = _kill_tree(pid)
+		_mutex.unlock()
+
+
+	func wait_for_exit(pid: int) -> int:
+		while true:
+			_mutex.lock()
+			if _cancelled:
+				_pid = -1
+				_mutex.unlock()
+				return -1
+			if not OS.is_process_running(pid):
+				var status := OS.get_process_exit_code(pid)
+				_pid = -1
+				_mutex.unlock()
+				return status
+			_mutex.unlock()
+			OS.delay_msec(5)
+		return -1
 
 
 	func start(full_argv: PackedStringArray) -> void:
@@ -235,26 +285,49 @@ class Job:
 		if is_running and not _cancelled:
 			_cancelled = true
 			if _pid > 0:
-				_kill_tree(_pid)
+				descendant_discovery_complete = _kill_tree(_pid)
 		_mutex.unlock()
 
 
 	## Git's helpers (ssh, git-remote-https) inherit its pipes, so killing git alone would leave _drain() blocked until they exit on their own.
-	static func _kill_tree(pid: int) -> void:
+	static func _kill_tree(pid: int) -> bool:
 		if OS.get_name() == "Windows":
-			OS.execute("taskkill", ["/T", "/F", "/PID", str(pid)])
-			return
-		var descendants := PackedStringArray()
-		var queue := [pid]
-		while not queue.is_empty():
+			return OS.execute("taskkill", ["/T", "/F", "/PID", str(pid)]) == 0
+		var found := discover_descendants(pid, func(parent: int) -> Dictionary:
 			var out := []
-			OS.execute("pgrep", ["-P", str(queue.pop_back())], out)
-			for child in String(out[0]).split("\n", false):
-				descendants.append(child.strip_edges())
-				queue.append(child.to_int())
+			var status := OS.execute("pgrep", ["-P", str(parent)], out)
+			return {"status": status, "output": "" if out.is_empty() else String(out[0])}
+		)
 		OS.kill(pid)
+		var descendants: PackedStringArray = found["pids"]
 		if not descendants.is_empty():
 			OS.execute("kill", PackedStringArray(["-KILL"]) + descendants)
+		return found["complete"]
+
+
+	static func discover_descendants(pid: int, query: Callable) -> Dictionary:
+		var queue := [pid]
+		var seen := {pid: true}
+		var descendants := PackedStringArray()
+		var complete := true
+		while not queue.is_empty():
+			var result: Dictionary = query.call(queue.pop_back())
+			if result["status"] == 1: # pgrep: no matching children.
+				continue
+			if result["status"] != 0:
+				complete = false
+				continue
+			for value in String(result.get("output", "")).split("\n", false):
+				var child := value.strip_edges()
+				if not child.is_valid_int() or child.to_int() <= 0:
+					complete = false
+					continue
+				var number := child.to_int()
+				if not seen.has(number):
+					seen[number] = true
+					descendants.append(str(number))
+					queue.append(number)
+		return {"pids": descendants, "complete": complete}
 
 
 	## Cancels and blocks until the worker thread is done; finished is never emitted afterwards.
@@ -272,11 +345,7 @@ class Job:
 			_finish.call_deferred({ "exit_code": -1, "text": "Couldn't start `git` — is it on PATH?", "cancelled": false })
 			return
 
-		_mutex.lock()
-		_pid = info["pid"]
-		if _cancelled:
-			_kill_tree(_pid)
-		_mutex.unlock()
+		register_pid(info["pid"])
 		var stdio: FileAccess = info["stdio"]
 		var stderr: FileAccess = info["stderr"]
 		# Both pipes drained at once, so neither can fill up and stall git; stderr here, since that's where progress arrives.
@@ -284,13 +353,10 @@ class Job:
 		out_thread.start(_drain.bind(stdio, false))
 		var err := _strip_progress(_drain(stderr, true))
 		var out: String = out_thread.wait_to_finish()
-		if _cancelled:
-			# OS.kill() already reaped the process — querying it again would only log "process does not exist".
-			_finish.call_deferred({ "exit_code": -1, "text": "Cancelled.", "cancelled": true })
+		var exit_code := wait_for_exit(info["pid"])
+		if cancelled():
+			_finish.call_deferred({"exit_code": -1, "text": "Cancelled." + (" Descendant cleanup could not be verified." if not descendant_discovery_complete else ""), "cancelled": true})
 			return
-		while OS.is_process_running(_pid):
-			OS.delay_msec(5)
-		var exit_code := OS.get_process_exit_code(_pid)
 		var text := out + ("\n" if not out.is_empty() and not err.is_empty() else "") + err
 		_finish.call_deferred({ "exit_code": exit_code, "text": text, "cancelled": false })
 

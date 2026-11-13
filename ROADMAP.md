@@ -1,5 +1,9 @@
 # GittyDot release roadmap
 
+## 0.2.6 — Correctness and Responsiveness Update
+
+Fix index mutation on failed staging, locally exclude scratch in existing repositories/worktrees, repair callback and stale-menu races, remove idle script reads, move changed-buffer gutter work to a coalescing worker with immutable baseline caching, clean obsolete dock code, and report test capabilities/trust explicitly. Includes aligned side-by-side display gaps. See CHANGELOG.md for release behavior and verification limits.
+
 ## 0.2.5 — Compatability Update
 
 Verified on Windows with Godot 4.4.1, 4.5.2, 4.6.3, 4.7, 4.7.2 and 4.8 beta1. Requires Godot 4.4+; 4.0–4.3 were assessed and remain unsupported. The earlier 0.2.0 and 0.2.1 packages are preserved separately.

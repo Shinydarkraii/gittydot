@@ -10,6 +10,7 @@ const EditorOpen := preload("res://addons/gittydot/util/editor_open.gd")
 const Settings := preload("res://addons/gittydot/util/settings.gd")
 const DELAY := 0.35
 static var instance: Node
+static var content_reads := 0 # Regression/benchmark counter; discovery must stay cheap.
 
 var enabled := true
 var _timer: Timer
@@ -68,10 +69,10 @@ func discover_tabs() -> void:
 			if enabled and _dirty(code):
 				_timer.start()
 		else:
-			var disk := _disk_text(path)
-			# Native reload/save completed; this is a new baseline, not a user edit.
-			if normalized(code.text) == normalized(disk):
-				_tabs[id]["disk"] = disk
+			# A native save/reload updates the saved marker. Its clean buffer is
+			# the baseline; disk is read in full immediately before any write.
+			if not _dirty(code):
+				_tabs[id]["disk"] = code.text
 				_announced.erase(path)
 	for id in _tabs.keys():
 		if not present.has(id):
@@ -131,7 +132,7 @@ func flush_pending() -> bool:
 
 
 static func normalized(text: String) -> String:
-	return text.replace("\r\n", "\n")
+	return text.trim_prefix("\ufeff").replace("\r\n", "\n")
 
 
 static func can_save(baseline: String, disk: String, buffer: String, exists: bool) -> bool:
@@ -143,6 +144,7 @@ static func _dirty(code: CodeEdit) -> bool:
 
 
 static func _disk_text(path: String) -> String:
+	content_reads += 1
 	return FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) else ""
 
 

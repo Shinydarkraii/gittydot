@@ -10,6 +10,8 @@ const GitStatusFlags := preload("res://addons/gittydot/util/git_status_flags.gd"
 const GitIcons := preload("res://addons/gittydot/util/git_icons.gd")
 const ChangelistStore := preload("res://addons/gittydot/util/changelist_store.gd")
 
+const Scratch := preload("res://addons/gittydot/util/scratch_space.gd")
+
 const US := GitCli.US
 
 ## Porcelain XY codes for unmerged paths (both sides touched the file, or one deleted what the other changed).
@@ -191,9 +193,12 @@ func get_head_text(path: String) -> Variant:
 
 ## Zero-context diff between two texts (e.g. HEAD and the editor's unsaved buffer), for DiffHunks.parse_regions().
 func diff_texts(old_text: String, new_text: String) -> String:
-	var stamp := Time.get_ticks_usec()
-	var old_path := _temp_dir().path_join("godit_old_%d.tmp" % stamp)
-	var new_path := _temp_dir().path_join("godit_new_%d.tmp" % stamp)
+	var directory := _temp_dir()
+	if directory.is_empty():
+		return ""
+	var stamp := "%d_%d" % [get_instance_id(), Time.get_ticks_usec()]
+	var old_path := directory.path_join("godit_old_%s.tmp" % stamp)
+	var new_path := directory.path_join("godit_new_%s.tmp" % stamp)
 	for pair in [[old_path, old_text], [new_path, new_text]]:
 		var f := FileAccess.open(pair[0], FileAccess.WRITE)
 		if f == null:
@@ -209,7 +214,10 @@ func diff_texts(old_text: String, new_text: String) -> String:
 
 ## Applies a patch built by DiffHunks.build_patch(). cached=true targets the index (stage/unstage), false the working tree (revert); reverse undoes the patch instead of applying it. --recount means partial-hunk patches needn't have exact line counts in their headers.
 func apply_patch(patch: String, cached: bool, reverse: bool, check_only := false) -> Dictionary:
-	var patch_path := _temp_dir().path_join("godit_patch_%d.patch" % Time.get_ticks_usec())
+	var directory := _temp_dir()
+	if directory.is_empty():
+		return {"ok": false, "error": Scratch.last_error, "output": ""}
+	var patch_path := directory.path_join("godit_patch_%d.patch" % Time.get_ticks_usec())
 	var patch_file := FileAccess.open(patch_path, FileAccess.WRITE)
 	if patch_file == null:
 		return { "ok": false, "error": "couldn't write a temp patch file at %s" % patch_path, "output": "" }
@@ -261,17 +269,24 @@ func stage_files(paths: Array) -> Dictionary:
 
 
 func stage_file(path: String) -> bool:
-	# `rm --cached` is the fallback for whatever `add` doesn't cover.
-	if GitCli.run(_repo_root, ["add", "--", path])["exit_code"] == 0:
-		return true
-	return GitCli.run(_repo_root, ["rm", "--cached", "--", path])["exit_code"] == 0
+	return stage_files([path])["ok"]
 
 
 func unstage_file(path: String) -> bool:
-	if GitCli.run(_repo_root, ["reset", "--", path])["exit_code"] == 0:
-		return true
-	# Unborn branch, no HEAD to reset to — just drop it from the index.
-	return GitCli.run(_repo_root, ["rm", "--cached", "--", path])["exit_code"] == 0
+	return unstage_files([path])["ok"]
+
+
+func unstage_files(paths: Array) -> Dictionary:
+	if paths.is_empty():
+		return {"ok": true, "error": "", "output": ""}
+	if GitCli.run(_repo_root, ["rev-parse", "--verify", "HEAD"])["exit_code"] == 0:
+		return _simple(["reset", "--"] + paths)
+	# Only a symbolic branch with no existing ref is genuinely unborn. Corrupt
+	# HEADs and failed resets on established branches must remain failures.
+	var ref := GitCli.run(_repo_root, ["symbolic-ref", "-q", "HEAD"])
+	if ref["exit_code"] == 0 and String(ref["text"]).strip_edges().begins_with("refs/heads/") and GitCli.run(_repo_root, ["show-ref", "--verify", "--quiet", ref["text"].strip_edges()])["exit_code"] == 1:
+		return _simple(["rm", "--cached", "--"] + paths)
+	return {"ok": false, "error": "Cannot resolve HEAD safely; the index was left unchanged.", "output": ""}
 
 
 ## Discards uncommitted changes to path. Restores from HEAD if committed,
@@ -1102,7 +1117,10 @@ var _search_job: RefCounted = null
 
 ## Per-line blame of path as it reads in contents (the editor's possibly unsaved text): [{"oid", "author", "time", "summary"}], 0-based by line; "oid" is "" for uncommitted lines. null if git failed. Coroutine (background thread).
 func blame(path: String, contents: String) -> Variant:
-	var tmp_path := _temp_dir().path_join("godit_blame_%d.tmp" % Time.get_ticks_usec())
+	var directory := _temp_dir()
+	if directory.is_empty():
+		return null
+	var tmp_path := directory.path_join("godit_blame_%d.tmp" % Time.get_ticks_usec())
 	var tmp := FileAccess.open(tmp_path, FileAccess.WRITE)
 	if tmp == null:
 		return null
@@ -1220,8 +1238,15 @@ func resolve_commit(ref: String) -> String:
 func read_head_oid() -> String:
 	var head := _read_small(get_git_dir().path_join("HEAD"))
 	if head.begins_with("ref: "):
-		head = _read_small(get_common_dir().path_join(head.substr(5)))
-	return head if head.length() >= 40 and not head.contains(" ") else get_head_oid()
+		var ref := head.substr(5)
+		head = _read_small(get_common_dir().path_join(ref))
+		if head.is_empty():
+			for line in _read_small(get_common_dir().path_join("packed-refs")).split("\n"):
+				if line.ends_with(" " + ref):
+					head = line.get_slice(" ", 0)
+					break
+	return head if head.length() >= 40 and head.is_valid_hex_number() else ""
+
 
 
 ## The refs, config and stash reflog parts of a RepoWatcher snapshot, read now; with_status adds `git status` too.
@@ -1591,12 +1616,4 @@ func _tags_by_oid() -> Dictionary:
 
 
 func _temp_dir() -> String:
-	var project_root := ProjectSettings.globalize_path("res://").trim_suffix("/")
-	var temp := project_root.path_join(project_root.get_file() + "-temp-chatgpt/gittydot")
-	DirAccess.make_dir_recursive_absolute(temp)
-	var ignore := temp.path_join(".gdignore")
-	if not FileAccess.file_exists(ignore):
-		var marker := FileAccess.open(ignore, FileAccess.WRITE)
-		if marker != null:
-			marker.close()
-	return temp
+	return Scratch.prepare(ProjectSettings.globalize_path("res://"))
